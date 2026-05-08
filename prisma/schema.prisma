@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Patient {
+  id          String   @id @default(cuid())
+  name        String
+  email       String
+  phone       String
+  dob         String
+  lastVisit   String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  conversations Conversation[]
+  appointments  Appointment[]
+}
+
+model Conversation {
+  id           String   @id @default(cuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id])
+  channel      String   @default("web")
+  status       String   @default("active")
+  subject      String?
+  messageCount Int      @default(0)
+  lastMessage  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  messages     Message[]
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String
+  content        String
+  createdAt      DateTime     @default(now())
+}
+
+model Appointment {
+  id        String   @id @default(cuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id])
+  date      String
+  time      String
+  duration  Int      @default(30)
+  type      String
+  status    String   @default("scheduled")
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BotSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  category    String
+  description String?
+  updatedAt   DateTime @updatedAt
+}

@@ -1,0 +1,139 @@
+import { db } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function GET(request: NextRequest) {
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const status = searchParams.get('status');
+    const dateParam = searchParams.get('date');
+
+    const where: Record<string, unknown> = {};
+    if (status) where.status = status;
+    if (dateParam === 'today') {
+      where.date = new Date().toISOString().split('T')[0];
+    } else if (dateParam) {
+      where.date = dateParam;
+    }
+
+    const appointments = await db.appointment.findMany({
+      where,
+      include: {
+        patient: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: [{ date: 'asc' }, { time: 'asc' }],
+    });
+
+    // Flatten patient data for frontend
+    const flattened = appointments.map((appt) => ({
+      id: appt.id,
+      patientId: appt.patientId,
+      patientName: appt.patient.name,
+      date: appt.date,
+      time: appt.time,
+      duration: appt.duration,
+      type: appt.type,
+      status: appt.status,
+      notes: appt.notes,
+      createdAt: appt.createdAt,
+      updatedAt: appt.updatedAt,
+    }));
+
+    return NextResponse.json(flattened);
+  } catch (error) {
+    console.error('Error fetching appointments:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch appointments' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { patientId, patientName, date, time, duration, type, status, notes } = body;
+
+    // Find or create patient by name if patientId not provided
+    let resolvedPatientId = patientId;
+
+    if (!resolvedPatientId && patientName) {
+      // Try to find existing patient by name
+      const existingPatient = await db.patient.findFirst({
+        where: { name: { contains: patientName } },
+      });
+      if (existingPatient) {
+        resolvedPatientId = existingPatient.id;
+      } else {
+        // Create a new patient
+        const newPatient = await db.patient.create({
+          data: {
+            name: patientName,
+            email: `${patientName.toLowerCase().replace(/\s+/g, '.')}@guest.com`,
+            phone: '',
+            dob: '',
+            status: 'new',
+          },
+        });
+        resolvedPatientId = newPatient.id;
+      }
+    }
+
+    if (!resolvedPatientId || !date || !time || !type) {
+      return NextResponse.json(
+        { error: 'patientId (or patientName), date, time, and type are required' },
+        { status: 400 }
+      );
+    }
+
+    const appointment = await db.appointment.create({
+      data: {
+        patientId: resolvedPatientId,
+        date,
+        time,
+        duration: duration || 30,
+        type,
+        status: status || 'scheduled',
+        notes: notes || null,
+      },
+      include: {
+        patient: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return NextResponse.json({
+      id: appointment.id,
+      patientId: appointment.patientId,
+      patientName: appointment.patient.name,
+      date: appointment.date,
+      time: appointment.time,
+      duration: appointment.duration,
+      type: appointment.type,
+      status: appointment.status,
+      notes: appointment.notes,
+      createdAt: appointment.createdAt,
+      updatedAt: appointment.updatedAt,
+    }, { status: 201 });
+  } catch (error) {
+    console.error('Error creating appointment:', error);
+    return NextResponse.json(
+      { error: 'Failed to create appointment' },
+      { status: 500 }
+    );
+  }
+}
