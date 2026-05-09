@@ -9,6 +9,11 @@ async function main() {
   await prisma.message.deleteMany();
   await prisma.conversation.deleteMany();
   await prisma.appointment.deleteMany();
+  await prisma.appointmentRequest.deleteMany();
+  await prisma.lead.deleteMany();
+  await prisma.fAQ.deleteMany();
+  await prisma.doctor.deleteMany();
+  await prisma.service.deleteMany();
   await prisma.botSetting.deleteMany();
   await prisma.patient.deleteMany();
 
@@ -138,7 +143,346 @@ async function main() {
 
   console.log(`Created ${patients.length} patients`);
 
-  // Create 22 Conversations
+  // Create 8 Services
+  const services = await Promise.all([
+    prisma.service.create({
+      data: {
+        name: 'Dental Cleaning',
+        description: 'Professional teeth cleaning including scaling and polishing to remove plaque and tartar buildup.',
+        duration: '45 min',
+        requiresAppointment: true,
+        preparationInstructions: 'No special preparation needed. Avoid eating heavy meals before the appointment.',
+        price: '$80',
+        department: 'dental',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Root Canal Treatment',
+        description: 'Endodontic treatment to remove infected pulp, clean the root canal, and seal the tooth to save it from extraction.',
+        duration: '60-90 min',
+        requiresAppointment: true,
+        preparationInstructions: 'Take prescribed pain medication before the appointment if advised. Avoid chewing on the affected side.',
+        price: '$500-$800',
+        department: 'dental',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Braces & Orthodontics',
+        description: 'Traditional braces and clear aligner therapy for teeth alignment, bite correction, and smile improvement.',
+        duration: 'Varies',
+        requiresAppointment: true,
+        preparationInstructions: 'Initial consultation required. Bring any previous dental X-rays if available.',
+        price: '$3000-$6000',
+        department: 'dental',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Teeth Whitening',
+        description: 'Professional in-office teeth whitening using advanced LED technology for a brighter, more confident smile.',
+        duration: '60 min',
+        requiresAppointment: true,
+        preparationInstructions: 'Avoid coffee, tea, and dark foods for 24 hours before treatment. Brush teeth before the appointment.',
+        price: '$250-$400',
+        department: 'dental',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Dental Implants',
+        description: 'Permanent tooth replacement using titanium implants surgically placed in the jawbone with natural-looking crowns.',
+        duration: '60-90 min',
+        requiresAppointment: true,
+        preparationInstructions: 'Consultation and X-rays required. Inform doctor of any medications. Arrange for someone to drive you home.',
+        price: '$1500-$3000',
+        department: 'dental',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'General Consultation',
+        description: 'Comprehensive dental examination including oral health assessment, X-rays review, and personalized treatment plan.',
+        duration: '30 min',
+        requiresAppointment: false,
+        preparationInstructions: 'Bring your insurance card and any previous dental records. Arrive 10 minutes early for paperwork.',
+        price: '$50',
+        department: 'general',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Skin Treatment',
+        description: 'Cosmetic skin treatments including facial rejuvenation, acne scar treatment, and skin wellness consultations.',
+        duration: '45 min',
+        requiresAppointment: true,
+        preparationInstructions: 'Avoid sun exposure and retinol products for 48 hours before treatment. Come with a clean face.',
+        price: '$150-$300',
+        department: 'cosmetic',
+        isActive: true,
+      },
+    }),
+    prisma.service.create({
+      data: {
+        name: 'Physiotherapy',
+        description: 'Rehabilitation and pain management for jaw disorders (TMJ), post-surgical recovery, and musculoskeletal issues.',
+        duration: '45 min',
+        requiresAppointment: true,
+        preparationInstructions: 'Wear comfortable clothing. Bring any referral letters or imaging results.',
+        price: '$100-$200',
+        department: 'physiotherapy',
+        isActive: true,
+      },
+    }),
+  ]);
+
+  console.log(`Created ${services.length} services`);
+
+  // Create 4 Doctors
+  const doctors = await Promise.all([
+    prisma.doctor.create({
+      data: {
+        name: 'Sarah Ahmed',
+        specialization: 'General Dentistry',
+        phone: '(555) 100-3001',
+        availableDays: 'Mon-Sat',
+        isActive: true,
+      },
+    }),
+    prisma.doctor.create({
+      data: {
+        name: 'Michael Torres',
+        specialization: 'Endodontics (Root Canal Specialist)',
+        phone: '(555) 100-3002',
+        availableDays: 'Mon-Fri',
+        isActive: true,
+      },
+    }),
+    prisma.doctor.create({
+      data: {
+        name: 'Lisa Park',
+        specialization: 'Orthodontics',
+        phone: '(555) 100-3003',
+        availableDays: 'Tue-Sat',
+        isActive: true,
+      },
+    }),
+    prisma.doctor.create({
+      data: {
+        name: 'James Wilson',
+        specialization: 'Cosmetic Dentistry',
+        phone: '(555) 100-3004',
+        availableDays: 'Mon-Thu',
+        isActive: true,
+      },
+    }),
+  ]);
+
+  console.log(`Created ${doctors.length} doctors`);
+
+  // Create 5 Leads
+  const leads = await Promise.all([
+    prisma.lead.create({
+      data: {
+        name: 'Amanda Foster',
+        phone: '(555) 411-5001',
+        question: 'I have a chipped front tooth. Can you fix it and how much would it cost?',
+        preferredContact: 'phone',
+        status: 'new',
+        source: 'chatbot',
+      },
+    }),
+    prisma.lead.create({
+      data: {
+        name: 'Kevin Brooks',
+        phone: '(555) 411-5002',
+        question: 'Do you offer payment plans for dental implants? I need two implants.',
+        preferredContact: 'whatsapp',
+        status: 'contacted',
+        source: 'chatbot',
+      },
+    }),
+    prisma.lead.create({
+      data: {
+        name: 'Priya Sharma',
+        phone: '(555) 411-5003',
+        question: 'My son needs braces. What is the minimum age for orthodontic treatment?',
+        preferredContact: 'phone',
+        status: 'qualified',
+        source: 'web',
+      },
+    }),
+    prisma.lead.create({
+      data: {
+        name: 'Carlos Mendez',
+        phone: '(555) 411-5004',
+        question: 'I am looking for a dentist who accepts my insurance plan. Do you take Delta Dental?',
+        preferredContact: 'phone',
+        status: 'new',
+        source: 'chatbot',
+      },
+    }),
+    prisma.lead.create({
+      data: {
+        name: 'Linda Nguyen',
+        phone: '(555) 411-5005',
+        question: 'I had a tooth extracted last month at another clinic and want a second opinion on the healing.',
+        preferredContact: 'whatsapp',
+        status: 'contacted',
+        source: 'chatbot',
+      },
+    }),
+  ]);
+
+  console.log(`Created ${leads.length} leads`);
+
+  // Create 5 Appointment Requests
+  const today = new Date();
+  const formatDate = (date: Date) => date.toISOString().split('T')[0];
+
+  const appointmentRequests = await Promise.all([
+    prisma.appointmentRequest.create({
+      data: {
+        name: 'Amanda Foster',
+        phone: '(555) 411-5001',
+        preferredDate: formatDate(new Date(today.getTime() + 2 * 86400000)),
+        preferredTime: '10:00',
+        reason: 'Chipped front tooth - cosmetic repair consultation',
+        preferredDoctor: 'Dr. James Wilson',
+        status: 'pending',
+        source: 'chatbot',
+      },
+    }),
+    prisma.appointmentRequest.create({
+      data: {
+        name: 'Kevin Brooks',
+        phone: '(555) 411-5002',
+        preferredDate: formatDate(new Date(today.getTime() + 3 * 86400000)),
+        preferredTime: '14:00',
+        reason: 'Dental implant consultation - needs two implants',
+        preferredDoctor: null,
+        status: 'pending',
+        source: 'chatbot',
+      },
+    }),
+    prisma.appointmentRequest.create({
+      data: {
+        name: 'Priya Sharma',
+        phone: '(555) 411-5003',
+        preferredDate: formatDate(new Date(today.getTime() + 5 * 86400000)),
+        preferredTime: '11:30',
+        reason: 'Orthodontic consultation for son',
+        preferredDoctor: 'Dr. Lisa Park',
+        status: 'confirmed',
+        source: 'web',
+      },
+    }),
+    prisma.appointmentRequest.create({
+      data: {
+        name: 'Tom Richards',
+        phone: '(555) 411-5006',
+        preferredDate: formatDate(new Date(today.getTime() + 1 * 86400000)),
+        preferredTime: '09:00',
+        reason: 'Regular dental cleaning',
+        preferredDoctor: 'Dr. Sarah Ahmed',
+        status: 'confirmed',
+        source: 'chatbot',
+      },
+    }),
+    prisma.appointmentRequest.create({
+      data: {
+        name: 'Helen Park',
+        phone: '(555) 411-5007',
+        preferredDate: formatDate(new Date(today.getTime() - 2 * 86400000)),
+        preferredTime: '15:00',
+        reason: 'Toothache - emergency consultation',
+        preferredDoctor: null,
+        status: 'cancelled',
+        source: 'chatbot',
+      },
+    }),
+  ]);
+
+  console.log(`Created ${appointmentRequests.length} appointment requests`);
+
+  // Create 8 FAQs
+  const faqs = await Promise.all([
+    prisma.fAQ.create({
+      data: {
+        question: 'Are you open today?',
+        answer: 'We are open Monday to Friday from 8am to 6pm, and Saturday from 9am to 2pm. We are closed on Sundays. For emergencies, call our emergency line at (555) 100-2001.',
+        order: 1,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'What services do you offer?',
+        answer: 'We offer a wide range of dental services including general checkups, dental cleanings, root canal treatments, braces and orthodontics, teeth whitening, dental implants, and cosmetic dentistry. We also have skin treatment and physiotherapy departments.',
+        order: 2,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'Do you accept walk-ins?',
+        answer: 'We accept walk-ins for general consultations, but we recommend booking an appointment for specific treatments to ensure availability and minimize wait times. You can book through our chatbot, by phone, or on WhatsApp.',
+        order: 3,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'What is the consultation fee?',
+        answer: 'A general consultation costs $50. This includes a comprehensive oral health assessment and personalized treatment plan. The fee may be partially covered by insurance.',
+        order: 4,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'Do you treat children?',
+        answer: 'Yes, we treat patients of all ages, including children. We recommend scheduling an orthodontic evaluation for children around age 7. Our team is experienced in making young patients feel comfortable.',
+        order: 5,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'Where is your clinic located?',
+        answer: 'Our clinic is located at 123 Dental Street, Health City, HC 560001. We are near City Hospital, on the 2nd floor, opposite the pharmacy. Free parking is available behind the building.',
+        order: 6,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'Do you accept insurance?',
+        answer: 'Yes, we accept most major dental insurance plans. Please bring your insurance card to your appointment and our billing team can verify your coverage. We also offer payment plans and financing options for treatments not covered by insurance.',
+        order: 7,
+        isActive: true,
+      },
+    }),
+    prisma.fAQ.create({
+      data: {
+        question: 'How can I book an appointment?',
+        answer: 'You can book an appointment through our website chatbot, by calling (555) 100-2000, or via WhatsApp at +15551002000. For emergencies, call our emergency line at (555) 100-2001.',
+        order: 8,
+        isActive: true,
+      },
+    }),
+  ]);
+
+  console.log(`Created ${faqs.length} FAQs`);
+
+  // Create Conversations
   const conversationsData = [
     { patientId: patients[0].id, channel: 'web', status: 'active', subject: 'Tooth pain consultation', lastMessage: 'I have a sharp pain in my lower molar.' },
     { patientId: patients[0].id, channel: 'phone', status: 'closed', subject: 'Appointment rescheduling', lastMessage: 'Thank you, the new time works perfectly.' },
@@ -165,7 +509,7 @@ async function main() {
   ];
 
   const conversations = await Promise.all(
-    conversationsData.map((conv, index) =>
+    conversationsData.map((conv) =>
       prisma.conversation.create({
         data: {
           ...conv,
@@ -177,7 +521,7 @@ async function main() {
 
   console.log(`Created ${conversations.length} conversations`);
 
-  // Create 44 Messages across conversations
+  // Create Messages across conversations
   const messagesData = [
     // Conversation 1: Sarah - Tooth pain
     { conversationId: conversations[0].id, role: 'user', content: 'Hi, I have a sharp pain in my lower molar when I eat something cold.' },
@@ -290,10 +634,7 @@ async function main() {
 
   console.log(`Created ${messagesData.length} messages`);
 
-  // Create 16 Appointments
-  const today = new Date();
-  const formatDate = (date: Date) => date.toISOString().split('T')[0];
-
+  // Create Appointments
   const appointmentsData = [
     { patientId: patients[0].id, date: formatDate(today), time: '09:00', duration: 30, type: 'checkup', status: 'scheduled', notes: 'Follow-up on tooth pain complaint' },
     { patientId: patients[1].id, date: formatDate(today), time: '10:30', duration: 60, type: 'root-canal', status: 'scheduled', notes: 'Root canal treatment - lower molar' },
@@ -319,7 +660,7 @@ async function main() {
 
   console.log(`Created ${appointments.length} appointments`);
 
-  // Create 10 Bot Settings
+  // Create Bot Settings (original + new)
   const settingsData = [
     { key: 'clinic_name', value: 'BrightSmile Dental Clinic', category: 'general', description: 'The display name of the dental clinic' },
     { key: 'clinic_hours', value: 'Mon-Fri: 8am-6pm, Sat: 9am-2pm', category: 'general', description: 'Operating hours of the clinic' },
@@ -331,6 +672,15 @@ async function main() {
     { key: 'closing_message', value: 'Thank you for contacting BrightSmile Dental! If you have any more questions, feel free to reach out. Have a great day!', category: 'responses', description: 'Default closing message for conversations' },
     { key: 'emergency_response', value: 'If you are experiencing a dental emergency, please call our emergency line at (555) 100-2001 immediately.', category: 'responses', description: 'Response for dental emergencies' },
     { key: 'ai_personality', value: 'friendly_professional', category: 'general', description: 'AI assistant personality style' },
+    // New settings
+    { key: 'clinic_address', value: '123 Dental Street, Health City, HC 560001', category: 'general', description: 'Clinic physical address' },
+    { key: 'whatsapp_number', value: '+15551002000', category: 'general', description: 'WhatsApp business number for patient communication' },
+    { key: 'emergency_phone', value: '(555) 100-2001', category: 'general', description: 'Emergency phone line for after-hours dental emergencies' },
+    { key: 'bot_primary_color', value: '#059669', category: 'appearance', description: 'Primary color for the chatbot widget (emerald-600)' },
+    { key: 'bot_welcome_message', value: 'Hi, welcome to BrightSmile Dental Clinic. How can I help you today?', category: 'responses', description: 'Welcome message shown when chatbot first opens' },
+    { key: 'after_hours_message', value: 'We\'re currently closed, but you can leave your details and our staff will contact you when we open.', category: 'responses', description: 'Message shown when patient contacts outside working hours' },
+    { key: 'parking_info', value: 'Free parking available behind the building. Clinic is near City Hospital, 2nd floor, opposite pharmacy.', category: 'general', description: 'Parking and landmark information for patients' },
+    { key: 'google_maps_url', value: 'https://maps.google.com/?q=123+Dental+Street+Health+City', category: 'general', description: 'Google Maps link to clinic location' },
   ];
 
   const settings = await Promise.all(

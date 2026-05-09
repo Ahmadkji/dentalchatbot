@@ -10,14 +10,20 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Users, MessageSquare, Calendar, CheckCircle } from 'lucide-react'
+import { Users, MessageSquare, Calendar, CheckCircle, Target, CalendarClock, Stethoscope, UserCog } from 'lucide-react'
+import { useAppStore } from '@/lib/store'
 
 interface DashboardStats {
   totalPatients: number
   activeConversations: number
   todayAppointments: number
   completedToday: number
+  pendingLeads: number
+  pendingAppointmentRequests: number
+  activeServices: number
+  activeDoctors: number
 }
 
 interface Appointment {
@@ -50,6 +56,26 @@ interface Patient {
   status: string
 }
 
+interface Lead {
+  id: string
+  name: string
+  phone: string
+  question: string
+  preferredContact: string
+  status: string
+  createdAt: string
+}
+
+interface AppointmentRequest {
+  id: string
+  name: string
+  phone: string
+  preferredDate: string
+  preferredTime: string
+  reason: string
+  status: string
+}
+
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
     scheduled: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -60,6 +86,8 @@ function StatusBadge({ status }: { status: string }) {
     closed: 'bg-gray-50 text-gray-600 border-gray-200',
     new: 'bg-sky-50 text-sky-700 border-sky-200',
     inactive: 'bg-gray-50 text-gray-600 border-gray-200',
+    contacted: 'bg-amber-50 text-amber-700 border-amber-200',
+    confirmed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   }
   return (
     <Badge variant="outline" className={`text-[11px] font-medium ${variants[status] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
@@ -85,21 +113,26 @@ function TableSkeleton({ rows = 4, cols = 5 }: { rows?: number; cols?: number })
 }
 
 export default function DashboardPage() {
+  const { setActivePage } = useAppStore()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [patients, setPatients] = useState<Patient[]>([])
+  const [pendingLeads, setPendingLeads] = useState<Lead[]>([])
+  const [pendingRequests, setPendingRequests] = useState<AppointmentRequest[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function fetchData() {
       setLoading(true)
       try {
-        const [statsRes, apptsRes, convRes, patientsRes] = await Promise.allSettled([
+        const [statsRes, apptsRes, convRes, patientsRes, leadsRes, reqRes] = await Promise.allSettled([
           fetch('/api/dashboard'),
           fetch('/api/appointments?date=today'),
           fetch('/api/conversations'),
           fetch('/api/patients'),
+          fetch('/api/leads?status=new'),
+          fetch('/api/appointment-requests?status=pending'),
         ])
 
         if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
@@ -118,6 +151,14 @@ export default function DashboardPage() {
           const data = await patientsRes.value.json()
           setPatients((data.patients || data || []).slice(0, 5))
         }
+        if (leadsRes.status === 'fulfilled' && leadsRes.value.ok) {
+          const data = await leadsRes.value.json()
+          setPendingLeads(Array.isArray(data) ? data : (data.leads || []))
+        }
+        if (reqRes.status === 'fulfilled' && reqRes.value.ok) {
+          const data = await reqRes.value.json()
+          setPendingRequests(Array.isArray(data) ? data : (data.appointmentRequests || []))
+        }
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error)
       } finally {
@@ -133,6 +174,10 @@ export default function DashboardPage() {
         { label: 'Active Conversations', value: stats.activeConversations, icon: MessageSquare, color: 'text-sky-600' },
         { label: "Today's Appointments", value: stats.todayAppointments, icon: Calendar, color: 'text-amber-600' },
         { label: 'Completed Today', value: stats.completedToday, icon: CheckCircle, color: 'text-emerald-600' },
+        { label: 'Pending Leads', value: stats.pendingLeads, icon: Target, color: 'text-sky-600' },
+        { label: 'Pending Appt Requests', value: stats.pendingAppointmentRequests, icon: CalendarClock, color: 'text-amber-600' },
+        { label: 'Active Services', value: stats.activeServices, icon: Stethoscope, color: 'text-emerald-600' },
+        { label: 'Active Doctors', value: stats.activeDoctors, icon: UserCog, color: 'text-emerald-600' },
       ]
     : []
 
@@ -151,7 +196,7 @@ export default function DashboardPage() {
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={4} cols={2} />
+                <TableSkeleton rows={8} cols={2} />
               ) : statRows.length > 0 ? (
                 statRows.map((row) => (
                   <TableRow key={row.label}>
@@ -175,6 +220,88 @@ export default function DashboardPage() {
           </Table>
         </div>
       </section>
+
+      {/* Pending Leads Table */}
+      {!loading && pendingLeads.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-muted-foreground">Pending Leads</h2>
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-emerald-600 hover:text-emerald-700" onClick={() => setActivePage('leads')}>
+              View All →
+            </Button>
+          </div>
+          <div className="rounded-md border max-h-72 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead className="hidden md:table-cell">Question</TableHead>
+                  <TableHead>Preferred Contact</TableHead>
+                  <TableHead className="hidden lg:table-cell">Created</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pendingLeads.slice(0, 5).map((lead) => (
+                  <TableRow key={lead.id}>
+                    <TableCell className="font-medium text-sm">{lead.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{lead.phone}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground max-w-[200px] truncate">
+                      {lead.question || '—'}
+                    </TableCell>
+                    <TableCell className="text-xs capitalize">{lead.preferredContact}</TableCell>
+                    <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
+                      {new Date(lead.createdAt).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell><StatusBadge status={lead.status} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
+
+      {/* Pending Appointment Requests Table */}
+      {!loading && pendingRequests.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-muted-foreground">Pending Appointment Requests</h2>
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-emerald-600 hover:text-emerald-700" onClick={() => setActivePage('appointment-requests')}>
+              View All →
+            </Button>
+          </div>
+          <div className="rounded-md border max-h-72 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Preferred Date</TableHead>
+                  <TableHead>Preferred Time</TableHead>
+                  <TableHead className="hidden md:table-cell">Reason</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pendingRequests.slice(0, 5).map((req) => (
+                  <TableRow key={req.id}>
+                    <TableCell className="font-medium text-sm">{req.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{req.phone}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{req.preferredDate}</TableCell>
+                    <TableCell className="text-sm tabular-nums">{req.preferredTime || '—'}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground max-w-[200px] truncate">
+                      {req.reason || '—'}
+                    </TableCell>
+                    <TableCell><StatusBadge status={req.status} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
 
       {/* Today's Appointments */}
       <section>

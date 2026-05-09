@@ -10,11 +10,19 @@ export async function GET() {
       activeConversations,
       todayAppointments,
       completedToday,
+      pendingLeads,
+      pendingAppointmentRequests,
+      activeServices,
+      activeDoctors,
     ] = await Promise.all([
       db.patient.count(),
       db.conversation.count({ where: { status: 'active' } }),
       db.appointment.count({ where: { date: today } }),
       db.appointment.count({ where: { date: today, status: 'completed' } }),
+      db.lead.count({ where: { status: 'new' } }),
+      db.appointmentRequest.count({ where: { status: 'pending' } }),
+      db.service.count({ where: { isActive: true } }),
+      db.doctor.count({ where: { isActive: true } }),
     ]);
 
     // Get recent conversations with flattened patient data
@@ -80,6 +88,10 @@ export async function GET() {
         activeConversations,
         todayAppointments,
         completedToday,
+        pendingLeads,
+        pendingAppointmentRequests,
+        activeServices,
+        activeDoctors,
       },
       recentConversations: flattenedConversations,
       todayAppointments: flattenedAppointments,

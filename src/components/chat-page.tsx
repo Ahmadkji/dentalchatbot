@@ -5,16 +5,25 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Bot, Send, Plus, User, Sparkles } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Bot,
+  Send,
+  Plus,
+  User,
+  Sparkles,
+  Phone,
+  MessageCircle,
+  Mail,
+  ExternalLink,
+  Navigation,
+  MapPin,
+  Clock,
+  Calendar,
+  HelpCircle,
+  Stethoscope,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 interface ChatMessage {
@@ -32,6 +41,179 @@ interface ChatConversation {
   createdAt: string
 }
 
+interface ClinicSettings {
+  clinic_name: string
+  clinic_address: string
+  clinic_phone: string
+  clinic_hours: string
+  whatsapp_number: string
+  emergency_phone: string
+  parking_info: string
+  google_maps_url: string
+  bot_name: string
+  bot_welcome_message: string
+  bot_primary_color: string
+  after_hours_message: string
+}
+
+const DEFAULT_SETTINGS: ClinicSettings = {
+  clinic_name: 'BrightSmile Dental Clinic',
+  clinic_address: '123 Smile Avenue, Suite 200, Springfield, IL 62704',
+  clinic_phone: '(555) 100-2000',
+  clinic_hours: 'Mon-Fri: 8am-6pm, Sat: 9am-2pm',
+  whatsapp_number: '15551002000',
+  emergency_phone: '(555) 100-2001',
+  parking_info: 'Free parking in building garage. Enter from Elm Street, validated for 2 hours.',
+  google_maps_url: 'https://maps.google.com/?q=123+Smile+Avenue+Springfield+IL',
+  bot_name: 'DentBot',
+  bot_welcome_message: "Hello! Welcome to BrightSmile Dental Clinic. I'm DentBot, your AI dental assistant. How can I help you today?",
+  bot_primary_color: '#059669',
+  after_hours_message: "We're currently closed. Leave a message and we'll respond when we open.",
+}
+
+function isAfterHours(hours: string): boolean {
+  const now = new Date()
+  const day = now.getDay()
+  const hour = now.getHours()
+  const minute = now.getMinutes()
+  const currentTime = hour * 60 + minute
+
+  // Sunday is always closed
+  if (day === 0) return true
+
+  // Saturday: 9am-2pm
+  if (day === 6) {
+    const open = 9 * 60
+    const close = 14 * 60
+    return currentTime < open || currentTime >= close
+  }
+
+  // Weekdays: 8am-6pm
+  const open = 8 * 60
+  const close = 18 * 60
+  return currentTime < open || currentTime >= close
+}
+
+function WhatsAppButton({ number }: { number: string }) {
+  const url = `https://wa.me/${number}?text=${encodeURIComponent('Hi, I would like to inquire about your dental services.')}`
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer">
+      <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white text-xs gap-1.5">
+        <Phone className="size-3" />
+        Chat on WhatsApp
+      </Button>
+    </a>
+  )
+}
+
+function LocationCard({ settings }: { settings: ClinicSettings }) {
+  return (
+    <Card className="border-emerald-200 bg-emerald-50/50">
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-start gap-2">
+          <MapPin className="size-4 text-emerald-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium">{settings.clinic_name}</p>
+            <p className="text-xs text-muted-foreground">{settings.clinic_address}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer">
+            <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
+              <ExternalLink className="size-3" />
+              Open in Google Maps
+            </Button>
+          </a>
+          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer">
+            <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
+              <Navigation className="size-3" />
+              Get Directions
+            </Button>
+          </a>
+        </div>
+        {settings.parking_info && (
+          <p className="text-[11px] text-muted-foreground">🅿️ {settings.parking_info}</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function AfterHoursCard({ settings }: { settings: ClinicSettings }) {
+  return (
+    <Card className="border-amber-200 bg-amber-50/50">
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <Clock className="size-4 text-amber-600" />
+          <p className="text-sm font-medium">After Hours</p>
+        </div>
+        <p className="text-xs text-muted-foreground">{settings.clinic_hours}</p>
+        {settings.emergency_phone && (
+          <a href={`tel:${settings.emergency_phone}`}>
+            <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1 border-amber-300 text-amber-700">
+              <Phone className="size-3" />
+              Emergency: {settings.emergency_phone}
+            </Button>
+          </a>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function StaffHandoff({ settings }: { settings: ClinicSettings }) {
+  const whatsappUrl = `https://wa.me/${settings.whatsapp_number}?text=${encodeURIComponent('Hi, I would like to inquire about your dental services.')}`
+  return (
+    <Card className="border-emerald-200 bg-emerald-50/30">
+      <CardContent className="p-3 space-y-2">
+        <p className="text-xs font-medium text-emerald-700">Need to speak with our team?</p>
+        <div className="flex flex-wrap gap-1.5">
+          {settings.clinic_phone && (
+            <a href={`tel:${settings.clinic_phone}`}>
+              <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
+                <Phone className="size-3" />
+                Call Clinic
+              </Button>
+            </a>
+          )}
+          {settings.whatsapp_number && (
+            <a href={whatsappUrl} target="_blank" rel="noopener noreferrer">
+              <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1 text-green-600 border-green-300">
+                <MessageCircle className="size-3" />
+                WhatsApp
+              </Button>
+            </a>
+          )}
+          <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1" onClick={() => toast.info('Message sent! We\'ll respond during business hours.')}>
+            <Mail className="size-3" />
+            Leave Message
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function StructuredMessage({ content, settings }: { content: string; settings: ClinicSettings }) {
+  const lower = content.toLowerCase()
+  const showWhatsApp = lower.includes('whatsapp') || lower.includes('whats app')
+  const showLocation = lower.includes('location') || lower.includes('address') || lower.includes('direction') || lower.includes('find us') || lower.includes('where') || lower.includes('located')
+  const showAfterHours = lower.includes('closed') || lower.includes('after hours') || lower.includes('after-hours') || lower.includes('after hour')
+  const showHandoff = lower.includes('call us') || lower.includes('contact us') || lower.includes('call our') || lower.includes('reach us') || lower.includes('speak with') || lower.includes('talk to') || lower.includes('our team') || lower.includes('our staff')
+
+  return (
+    <div className="space-y-2">
+      <div className="whitespace-pre-wrap">{content}</div>
+      <div className="space-y-2 mt-2">
+        {showLocation && <LocationCard settings={settings} />}
+        {showWhatsApp && <WhatsAppButton number={settings.whatsapp_number} />}
+        {showAfterHours && <AfterHoursCard settings={settings} />}
+        {showHandoff && <StaffHandoff settings={settings} />}
+      </div>
+    </div>
+  )
+}
+
 export default function ChatPage() {
   const [conversations, setConversations] = useState<ChatConversation[]>([])
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
@@ -40,6 +222,8 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [loadingConvs, setLoadingConvs] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [settings, setSettings] = useState<ClinicSettings>(DEFAULT_SETTINGS)
+  const [afterHours, setAfterHours] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const fetchConversations = useCallback(async () => {
@@ -60,6 +244,42 @@ export default function ChatPage() {
   useEffect(() => {
     fetchConversations()
   }, [fetchConversations])
+
+  // Fetch clinic settings
+  useEffect(() => {
+    async function fetchSettings() {
+      try {
+        const res = await fetch('/api/settings')
+        if (res.ok) {
+          const data = await res.json()
+          const settingsList = data.settings || []
+          const settingsMap: Record<string, string> = {}
+          settingsList.forEach((s: { key: string; value: string }) => {
+            settingsMap[s.key] = s.value
+          })
+          setSettings({
+            clinic_name: settingsMap.clinic_name || DEFAULT_SETTINGS.clinic_name,
+            clinic_address: settingsMap.clinic_address || DEFAULT_SETTINGS.clinic_address,
+            clinic_phone: settingsMap.clinic_phone || DEFAULT_SETTINGS.clinic_phone,
+            clinic_hours: settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours,
+            whatsapp_number: settingsMap.whatsapp_number || DEFAULT_SETTINGS.whatsapp_number,
+            emergency_phone: settingsMap.emergency_phone || DEFAULT_SETTINGS.emergency_phone,
+            parking_info: settingsMap.parking_info || DEFAULT_SETTINGS.parking_info,
+            google_maps_url: settingsMap.google_maps_url || DEFAULT_SETTINGS.google_maps_url,
+            bot_name: settingsMap.bot_name || DEFAULT_SETTINGS.bot_name,
+            bot_welcome_message: settingsMap.bot_welcome_message || DEFAULT_SETTINGS.bot_welcome_message,
+            bot_primary_color: settingsMap.bot_primary_color || DEFAULT_SETTINGS.bot_primary_color,
+            after_hours_message: settingsMap.after_hours_message || DEFAULT_SETTINGS.after_hours_message,
+          })
+          setAfterHours(isAfterHours(settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours))
+        }
+      } catch {
+        // Use defaults
+        setAfterHours(isAfterHours(DEFAULT_SETTINGS.clinic_hours))
+      }
+    }
+    fetchSettings()
+  }, [])
 
   const fetchMessages = useCallback(async (convId: string) => {
     setLoadingMessages(true)
@@ -88,8 +308,8 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const handleSend = async () => {
-    const message = input.trim()
+  const handleSend = async (messageText?: string) => {
+    const message = (messageText || input).trim()
     if (!message || sending) return
 
     const tempId = `temp-${Date.now()}`
@@ -152,6 +372,25 @@ export default function ChatPage() {
     setMessages([])
   }
 
+  const quickReplies = [
+    { emoji: '📅', label: 'Book Appointment', message: "I'd like to book an appointment" },
+    { emoji: '📍', label: 'Clinic Location', message: 'Where is the clinic located?' },
+    { emoji: '🕐', label: 'Opening Hours', message: 'What are your opening hours?' },
+    { emoji: '🦷', label: 'Our Services', message: 'What dental services do you offer?' },
+    { emoji: '💬', label: 'Chat on WhatsApp', message: 'How can I contact you on WhatsApp?' },
+    { emoji: '❓', label: 'FAQs', message: 'What are your frequently asked questions?' },
+  ]
+
+  const quickActionButtons = [
+    { label: 'Book Appointment', icon: Calendar, message: "I'd like to book an appointment" },
+    { label: 'Location', icon: MapPin, message: 'Where is the clinic located?' },
+    { label: 'Hours', icon: Clock, message: 'What are your opening hours?' },
+    { label: 'WhatsApp', icon: MessageCircle, message: 'How can I contact you on WhatsApp?' },
+    { label: 'Services', icon: Stethoscope, message: 'What dental services do you offer?' },
+  ]
+
+  const botName = settings.bot_name || 'DentBot'
+
   return (
     <div className="flex h-[calc(100vh-12rem)] gap-0 border rounded-md overflow-hidden">
       {/* Left Panel - Conversations List */}
@@ -159,12 +398,13 @@ export default function ChatPage() {
         <div className="p-3 border-b flex items-center justify-between">
           <h3 className="text-sm font-medium">Conversations</h3>
           <Button
-            variant="ghost"
+            variant="default"
             size="sm"
-            className="h-7 w-7 p-0"
+            className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 gap-1"
             onClick={startNewChat}
           >
-            <Plus className="size-3.5" />
+            <Plus className="size-3" />
+            New Chat
           </Button>
         </div>
         <ScrollArea className="flex-1">
@@ -207,7 +447,7 @@ export default function ChatPage() {
             <Bot className="size-3.5 text-emerald-700" />
           </div>
           <div>
-            <p className="text-sm font-medium">DentBot Assistant</p>
+            <p className="text-sm font-medium">{botName} Assistant</p>
             <p className="text-[10px] text-muted-foreground">
               {activeConvId ? 'Active conversation' : 'New conversation'}
             </p>
@@ -217,6 +457,14 @@ export default function ChatPage() {
             AI Powered
           </Badge>
         </div>
+
+        {/* After-Hours Banner */}
+        {afterHours && (
+          <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+            <span className="text-sm">🟡</span>
+            <p className="text-xs text-amber-700">{settings.after_hours_message}</p>
+          </div>
+        )}
 
         {/* Messages Area */}
         <ScrollArea className="flex-1 p-4">
@@ -233,7 +481,7 @@ export default function ChatPage() {
                   key={msg.id}
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <div className={`flex gap-2 max-w-[80%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <div className={`flex gap-2 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                     <div className={`flex size-7 items-center justify-center rounded-full shrink-0 mt-0.5 ${
                       msg.role === 'user' ? 'bg-emerald-600' : 'bg-white border'
                     }`}>
@@ -251,7 +499,11 @@ export default function ChatPage() {
                             : 'bg-white border shadow-sm text-foreground'
                         }`}
                       >
-                        {msg.content}
+                        {msg.role === 'assistant' ? (
+                          <StructuredMessage content={msg.content} settings={settings} />
+                        ) : (
+                          msg.content
+                        )}
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-1 px-1">
                         {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
@@ -263,28 +515,44 @@ export default function ChatPage() {
               <div ref={messagesEndRef} />
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center py-12">
-              <div className="flex size-14 items-center justify-center rounded-full bg-emerald-50 mb-4">
-                <Bot className="size-7 text-emerald-600" />
+            /* Welcome Screen */
+            <div className="flex flex-col items-center justify-center h-full text-center py-8">
+              <div className="flex size-16 items-center justify-center rounded-full bg-emerald-50 mb-4">
+                <Bot className="size-8 text-emerald-600" />
               </div>
-              <h3 className="font-medium text-sm mb-1">DentBot AI Assistant</h3>
-              <p className="text-muted-foreground text-xs max-w-sm">
-                Ask me anything about dental procedures, appointment scheduling, patient care, or let me help manage your clinic workflow.
+              <h3 className="font-medium text-base mb-1">{botName} AI Assistant</h3>
+              <p className="text-muted-foreground text-sm max-w-md mb-6">
+                {settings.bot_welcome_message}
               </p>
-              <div className="flex flex-wrap gap-2 mt-4 max-w-sm justify-center">
-                {['Schedule an appointment', 'Patient checkup info', 'Opening hours', 'Dental cleaning FAQ'].map((suggestion) => (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-w-lg">
+                {quickReplies.map((qr) => (
                   <button
-                    key={suggestion}
-                    onClick={() => setInput(suggestion)}
-                    className="text-xs border rounded-full px-3 py-1.5 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors"
+                    key={qr.label}
+                    onClick={() => handleSend(qr.message)}
+                    className="flex items-center gap-1.5 border rounded-lg px-3 py-2.5 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors text-left"
                   >
-                    {suggestion}
+                    <span className="text-base">{qr.emoji}</span>
+                    <span className="text-xs font-medium">{qr.label}</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
         </ScrollArea>
+
+        {/* Quick Reply Buttons Bar */}
+        <div className="px-4 py-1.5 border-t bg-white flex gap-1.5 overflow-x-auto">
+          {quickActionButtons.map((btn) => (
+            <button
+              key={btn.label}
+              onClick={() => handleSend(btn.message)}
+              className="flex items-center gap-1 border rounded-full px-2.5 py-1 text-[11px] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              <btn.icon className="size-3" />
+              {btn.label}
+            </button>
+          ))}
+        </div>
 
         {/* Input Area */}
         <div className="p-3 border-t bg-white">
@@ -293,12 +561,12 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder={`Message ${botName}...`}
               className="h-9 text-sm"
               disabled={sending}
             />
             <Button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={sending || !input.trim()}
               size="sm"
               className="h-9 bg-emerald-600 hover:bg-emerald-700 px-3"
@@ -307,7 +575,7 @@ export default function ChatPage() {
             </Button>
           </div>
           <p className="text-[10px] text-muted-foreground text-center mt-1.5">
-            DentBot may produce inaccurate information. Always verify clinical advice.
+            {botName} may produce inaccurate information. Always verify clinical advice.
           </p>
         </div>
       </div>

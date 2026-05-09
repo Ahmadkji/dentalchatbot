@@ -17,8 +17,8 @@ model Patient {
   status      String   @default("active")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  conversations Conversation[]
-  appointments  Appointment[]
+  conversations    Conversation[]
+  appointments     Appointment[]
 }
 
 model Conversation {
@@ -41,6 +41,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   role           String
   content        String
+  metadata       String?   // JSON string for structured data (quick replies, cards, etc.)
   createdAt      DateTime     @default(now())
 }
 
@@ -54,6 +55,67 @@ model Appointment {
   type      String
   status    String   @default("scheduled")
   notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Service {
+  id                      String   @id @default(cuid())
+  name                    String
+  description             String
+  duration                String   @default("30 min")
+  requiresAppointment     Boolean  @default(true)
+  preparationInstructions String?
+  price                   String?
+  department              String   @default("dental")
+  isActive                Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model Doctor {
+  id             String   @id @default(cuid())
+  name           String
+  specialization String
+  phone          String   @default("")
+  availableDays  String   @default("Mon-Fri")
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Lead {
+  id                  String   @id @default(cuid())
+  name                String
+  phone               String
+  question            String
+  preferredContact    String   @default("phone")
+  status              String   @default("new")
+  source              String   @default("chatbot")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model AppointmentRequest {
+  id              String   @id @default(cuid())
+  name            String
+  phone           String
+  preferredDate   String
+  preferredTime   String
+  reason          String
+  preferredDoctor String?
+  status          String   @default("pending")
+  source          String   @default("chatbot")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model FAQ {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

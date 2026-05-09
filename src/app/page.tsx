@@ -15,7 +15,19 @@ import {
   SidebarInset,
   SidebarTrigger,
 } from '@/components/ui/sidebar'
-import { Bot, LayoutDashboard, MessageSquare, Users, Calendar, Settings } from 'lucide-react'
+import {
+  Bot,
+  LayoutDashboard,
+  MessageSquare,
+  Users,
+  Calendar,
+  Settings,
+  Stethoscope,
+  UserCog,
+  Target,
+  CalendarClock,
+  HelpCircle,
+} from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Separator } from '@/components/ui/separator'
@@ -25,14 +37,50 @@ import PatientsPage from '@/components/patients-page'
 import AppointmentsPage from '@/components/appointments-page'
 import ChatPage from '@/components/chat-page'
 import SettingsPage from '@/components/settings-page'
+import ServicesPage from '@/components/services-page'
+import DoctorsPage from '@/components/doctors-page'
+import LeadsPage from '@/components/leads-page'
+import AppointmentRequestsPage from '@/components/appointment-requests-page'
+import FAQPage from '@/components/faq-page'
 
-const navItems: { page: Page; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { page: 'conversations', label: 'Conversations', icon: MessageSquare },
-  { page: 'patients', label: 'Patients', icon: Users },
-  { page: 'appointments', label: 'Appointments', icon: Calendar },
-  { page: 'chat', label: 'AI Chat', icon: Bot },
-  { page: 'settings', label: 'Settings', icon: Settings },
+interface NavItem {
+  page: Page
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+const navGroups: { label: string; items: NavItem[] }[] = [
+  {
+    label: 'Main',
+    items: [
+      { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { page: 'chat', label: 'AI Chat', icon: Bot },
+    ],
+  },
+  {
+    label: 'Management',
+    items: [
+      { page: 'patients', label: 'Patients', icon: Users },
+      { page: 'appointments', label: 'Appointments', icon: Calendar },
+      { page: 'services', label: 'Services', icon: Stethoscope },
+      { page: 'doctors', label: 'Doctors', icon: UserCog },
+    ],
+  },
+  {
+    label: 'Leads & Requests',
+    items: [
+      { page: 'conversations', label: 'Conversations', icon: MessageSquare },
+      { page: 'appointment-requests', label: 'Appointment Requests', icon: CalendarClock },
+      { page: 'leads', label: 'Leads', icon: Target },
+    ],
+  },
+  {
+    label: 'Configuration',
+    items: [
+      { page: 'faq', label: 'FAQ', icon: HelpCircle },
+      { page: 'settings', label: 'Settings', icon: Settings },
+    ],
+  },
 ]
 
 const pageTitles: Record<Page, string> = {
@@ -41,6 +89,11 @@ const pageTitles: Record<Page, string> = {
   patients: 'Patients',
   appointments: 'Appointments',
   chat: 'AI Chat',
+  services: 'Services',
+  doctors: 'Doctors',
+  leads: 'Leads',
+  'appointment-requests': 'Appointment Requests',
+  faq: 'FAQ',
   settings: 'Settings',
 }
 
@@ -61,6 +114,16 @@ export default function Home() {
         return <ChatPage />
       case 'settings':
         return <SettingsPage />
+      case 'services':
+        return <ServicesPage />
+      case 'doctors':
+        return <DoctorsPage />
+      case 'leads':
+        return <LeadsPage />
+      case 'appointment-requests':
+        return <AppointmentRequestsPage />
+      case 'faq':
+        return <FAQPage />
     }
   }
 
@@ -76,28 +139,30 @@ export default function Home() {
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Navigation</SidebarGroupLabel>
-            <SidebarMenu>
-              {navItems.map((item) => (
-                <SidebarMenuItem key={item.page}>
-                  <SidebarMenuButton
-                    isActive={activePage === item.page}
-                    onClick={() => setActivePage(item.page)}
-                    tooltip={item.label}
-                    className={
-                      activePage === item.page
-                        ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800'
-                        : ''
-                    }
-                  >
-                    <item.icon className="size-4" />
-                    <span>{item.label}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroup>
+          {navGroups.map((group) => (
+            <SidebarGroup key={group.label}>
+              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+              <SidebarMenu>
+                {group.items.map((item) => (
+                  <SidebarMenuItem key={item.page}>
+                    <SidebarMenuButton
+                      isActive={activePage === item.page}
+                      onClick={() => setActivePage(item.page)}
+                      tooltip={item.label}
+                      className={
+                        activePage === item.page
+                          ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800'
+                          : ''
+                      }
+                    >
+                      <item.icon className="size-4" />
+                      <span>{item.label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          ))}
         </SidebarContent>
         <SidebarFooter className="border-t">
           <div className="px-2 py-1 text-xs text-muted-foreground">
