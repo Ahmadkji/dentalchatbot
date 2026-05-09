@@ -235,7 +235,7 @@ export default function ConversationsPage() {
                         value={conv.status}
                         onValueChange={(val) => updateStatus(conv.id, val)}
                       >
-                        <SelectTrigger className="h-7 w-7 p-0 border-0" size="sm">
+                        <SelectTrigger className="h-7 w-7 p-0 border-0">
                           <MoreHorizontal className="size-3.5 text-muted-foreground" />
                         </SelectTrigger>
                         <SelectContent>

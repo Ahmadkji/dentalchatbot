@@ -1,6 +1,15 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
 
+// Get today's date in local timezone (not UTC)
+function getTodayLocal(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -10,7 +19,7 @@ export async function GET(request: NextRequest) {
     const where: Record<string, unknown> = {};
     if (status) where.status = status;
     if (dateParam === 'today') {
-      where.date = new Date().toISOString().split('T')[0];
+      where.date = getTodayLocal();
     } else if (dateParam) {
       where.date = dateParam;
     }
@@ -79,7 +88,7 @@ export async function POST(request: NextRequest) {
             email: `${patientName.toLowerCase().replace(/\s+/g, '.')}@guest.com`,
             phone: '',
             dob: '',
-            status: 'new',
+            status: 'active',
           },
         });
         resolvedPatientId = newPatient.id;

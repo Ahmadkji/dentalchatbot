@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
         phone: phone || '',
         dob: resolvedDob || '',
         lastVisit: lastVisit || null,
-        status: status || 'new',
+        status: status || 'active',
       },
     });
 

@@ -8,7 +8,7 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status, notes } = body;
+    const { status, notes, date, time, duration, type } = body;
 
     const existing = await db.appointment.findUnique({
       where: { id },
@@ -24,6 +24,10 @@ export async function PATCH(
     const data: Record<string, unknown> = {};
     if (status !== undefined) data.status = status;
     if (notes !== undefined) data.notes = notes;
+    if (date !== undefined) data.date = date;
+    if (time !== undefined) data.time = time;
+    if (duration !== undefined) data.duration = duration;
+    if (type !== undefined) data.type = type;
 
     const appointment = await db.appointment.update({
       where: { id },
@@ -41,7 +45,20 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(appointment);
+    // Return flattened response consistent with GET/POST
+    return NextResponse.json({
+      id: appointment.id,
+      patientId: appointment.patientId,
+      patientName: appointment.patient.name,
+      date: appointment.date,
+      time: appointment.time,
+      duration: appointment.duration,
+      type: appointment.type,
+      status: appointment.status,
+      notes: appointment.notes,
+      createdAt: appointment.createdAt,
+      updatedAt: appointment.updatedAt,
+    });
   } catch (error) {
     console.error('Error updating appointment:', error);
     return NextResponse.json(

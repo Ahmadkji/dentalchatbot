@@ -14,7 +14,7 @@ async function getOrCreateGuestPatient() {
         email: 'guest@dentbot.ai',
         phone: '',
         dob: '',
-        status: 'new',
+        status: 'active',
       },
     });
   }
@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
 
     // Build messages array for LLM
     const llmMessages: Array<{ role: string; content: string }> = [
-      { role: 'assistant', content: systemPrompt },
+      { role: 'system', content: systemPrompt },
     ];
 
     // Add conversation history

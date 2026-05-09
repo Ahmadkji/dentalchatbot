@@ -5,8 +5,17 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const status = searchParams.get('status');
+    const search = searchParams.get('search');
 
-    const where = status ? { status } : {};
+    const where: Record<string, unknown> = {};
+    if (status) where.status = status;
+    if (search) {
+      where.OR = [
+        { patient: { name: { contains: search } } },
+        { subject: { contains: search } },
+        { channel: { contains: search } },
+      ];
+    }
 
     const conversations = await db.conversation.findMany({
       where,

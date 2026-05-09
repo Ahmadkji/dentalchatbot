@@ -33,7 +33,20 @@ export async function GET(
       );
     }
 
-    return NextResponse.json(conversation);
+    // Return flattened conversation with messages
+    return NextResponse.json({
+      id: conversation.id,
+      patientId: conversation.patientId,
+      patientName: conversation.patient.name,
+      channel: conversation.channel,
+      status: conversation.status,
+      subject: conversation.subject,
+      messageCount: conversation.messageCount,
+      lastMessage: conversation.lastMessage,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      messages: conversation.messages,
+    });
   } catch (error) {
     console.error('Error fetching conversation:', error);
     return NextResponse.json(
@@ -86,7 +99,19 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(conversation);
+    // Return flattened response consistent with list endpoint
+    return NextResponse.json({
+      id: conversation.id,
+      patientId: conversation.patientId,
+      patientName: conversation.patient.name,
+      channel: conversation.channel,
+      status: conversation.status,
+      subject: conversation.subject,
+      messageCount: conversation.messageCount,
+      lastMessage: conversation.lastMessage,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+    });
   } catch (error) {
     console.error('Error updating conversation:', error);
     return NextResponse.json(
