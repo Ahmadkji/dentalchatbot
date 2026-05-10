@@ -225,7 +225,7 @@ export default function AppointmentRequestsPage() {
             <TabsTrigger value="cancelled" className="text-xs px-3 h-6">Cancelled</TabsTrigger>
           </TabsList>
         </Tabs>
-        <div className="relative flex-1 max-w-sm min-w-[180px]">
+        <div className="relative w-full min-w-[180px] sm:max-w-sm sm:flex-1">
           <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
           <Input
             placeholder="Search requests..."
@@ -234,13 +234,13 @@ export default function AppointmentRequestsPage() {
             className="h-8 pl-8 text-sm"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           <CalendarDays className="size-3.5 text-muted-foreground" />
           <Input
             type="date"
             value={dateFilter}
             onChange={(e) => setDateFilter(e.target.value)}
-            className="h-8 w-[150px] text-sm"
+            className="h-8 w-full text-sm sm:w-[150px]"
           />
           {dateFilter && (
             <Button
@@ -256,7 +256,7 @@ export default function AppointmentRequestsPage() {
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <Button
             size="sm"
-            className="h-8 bg-emerald-600 hover:bg-emerald-700"
+            className="h-8 w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
             onClick={() => {
               setForm(emptyForm)
               setAddDialogOpen(true)
@@ -289,7 +289,7 @@ export default function AppointmentRequestsPage() {
                   placeholder="(555) 123-4567"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="ar-date">Preferred Date</Label>
                   <Input
@@ -319,7 +319,7 @@ export default function AppointmentRequestsPage() {
                   rows={3}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Preferred Doctor</Label>
                   <Input
@@ -361,9 +361,9 @@ export default function AppointmentRequestsPage() {
       </div>
 
       {/* Appointment Requests Table */}
-      <div className="rounded-md border">
+      <div className="rounded-md border bg-white">
         <div className="max-h-[600px] overflow-y-auto">
-          <Table>
+          <Table className="min-w-[560px] sm:min-w-[800px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
@@ -494,7 +494,7 @@ export default function AppointmentRequestsPage() {
           </DialogHeader>
           {selectedRequest && (
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Name</p>
                   <p className="text-sm font-medium">{selectedRequest.name}</p>
@@ -504,7 +504,7 @@ export default function AppointmentRequestsPage() {
                   <p className="text-sm">{selectedRequest.phone || '—'}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Preferred Date</p>
                   <p className="text-sm">{formatDate(selectedRequest.preferredDate)}</p>
@@ -514,7 +514,7 @@ export default function AppointmentRequestsPage() {
                   <p className="text-sm">{formatTime(selectedRequest.preferredTime)}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Preferred Doctor</p>
                   <p className="text-sm">{selectedRequest.preferredDoctor || 'Any available'}</p>
@@ -528,7 +528,7 @@ export default function AppointmentRequestsPage() {
                   </p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Status</p>
                   <StatusBadge status={selectedRequest.status} />

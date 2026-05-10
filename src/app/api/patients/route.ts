@@ -6,15 +6,26 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const search = searchParams.get('search');
 
-    const where = search
-      ? {
-          OR: [
-            { name: { contains: search } },
-            { email: { contains: search } },
-            { phone: { contains: search } },
-          ],
-        }
-      : {};
+    let where: Record<string, unknown> = {};
+    if (search) {
+      // For mock store, get all and filter manually for contains
+      const all = await db.patient.findMany();
+      const filtered = all.filter((p) =>
+        p.name.includes(search) || p.email.includes(search) || p.phone.includes(search)
+      );
+      const formatted = filtered.map((p) => ({
+        id: p.id,
+        name: p.name,
+        email: p.email,
+        phone: p.phone,
+        dateOfBirth: p.dob,
+        lastVisit: p.lastVisit,
+        status: p.status,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+      return NextResponse.json(formatted);
+    }
 
     const patients = await db.patient.findMany({
       where,

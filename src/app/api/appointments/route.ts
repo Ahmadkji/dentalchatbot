@@ -26,33 +26,25 @@ export async function GET(request: NextRequest) {
 
     const appointments = await db.appointment.findMany({
       where,
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            status: true,
-          },
-        },
-      },
       orderBy: [{ date: 'asc' }, { time: 'asc' }],
     });
 
     // Flatten patient data for frontend
-    const flattened = appointments.map((appt) => ({
-      id: appt.id,
-      patientId: appt.patientId,
-      patientName: appt.patient.name,
-      date: appt.date,
-      time: appt.time,
-      duration: appt.duration,
-      type: appt.type,
-      status: appt.status,
-      notes: appt.notes,
-      createdAt: appt.createdAt,
-      updatedAt: appt.updatedAt,
+    const flattened = await Promise.all(appointments.map(async (appt) => {
+      const patient = await db.patient.findUnique({ where: { id: appt.patientId } });
+      return {
+        id: appt.id,
+        patientId: appt.patientId,
+        patientName: patient?.name ?? 'Unknown',
+        date: appt.date,
+        time: appt.time,
+        duration: appt.duration,
+        type: appt.type,
+        status: appt.status,
+        notes: appt.notes,
+        createdAt: appt.createdAt,
+        updatedAt: appt.updatedAt,
+      };
     }));
 
     return NextResponse.json(flattened);
@@ -75,9 +67,8 @@ export async function POST(request: NextRequest) {
 
     if (!resolvedPatientId && patientName) {
       // Try to find existing patient by name
-      const existingPatient = await db.patient.findFirst({
-        where: { name: { contains: patientName } },
-      });
+      const allPatients = await db.patient.findMany();
+      const existingPatient = allPatients.find((p) => p.name.includes(patientName));
       if (existingPatient) {
         resolvedPatientId = existingPatient.id;
       } else {
@@ -112,23 +103,14 @@ export async function POST(request: NextRequest) {
         status: status || 'scheduled',
         notes: notes || null,
       },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            status: true,
-          },
-        },
-      },
     });
+
+    const aptPatient = await db.patient.findUnique({ where: { id: appointment.patientId } });
 
     return NextResponse.json({
       id: appointment.id,
       patientId: appointment.patientId,
-      patientName: appointment.patient.name,
+      patientName: aptPatient?.name ?? 'Unknown',
       date: appointment.date,
       time: appointment.time,
       duration: appointment.duration,

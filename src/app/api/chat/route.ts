@@ -1,4 +1,5 @@
 import { db } from '@/lib/db';
+import { clinicData, getDefaultClinic } from '@/lib/clinic-data';
 import ZAI from 'z-ai-web-dev-sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -23,6 +24,8 @@ async function getOrCreateGuestPatient() {
 
 // Build dynamic system prompt from database data
 async function buildSystemPrompt() {
+  const clinic = await getDefaultClinic();
+
   // 1. Load all settings from DB
   const settings = await db.botSetting.findMany();
   const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -36,22 +39,46 @@ async function buildSystemPrompt() {
   // 4. Load active doctors
   const doctors = await db.doctor.findMany({ where: { isActive: true } });
 
+  // 5. Load trained clinic knowledge
+  const knowledgeSources = clinic
+    ? await clinicData.knowledgeSource.findMany({
+        where: { clinicId: clinic.id, status: 'trained' },
+        orderBy: { updatedAt: 'desc' },
+      })
+    : [];
+  const knowledgeChunks = clinic
+    ? await clinicData.knowledgeChunk.findMany({
+        where: { clinicId: clinic.id },
+        orderBy: [{ sourceId: 'asc' }, { order: 'asc' }],
+      })
+    : [];
+  const knowledgeChunksBySource = new Map<string, string[]>();
+
+  for (const chunk of knowledgeChunks) {
+    const existing = knowledgeChunksBySource.get(chunk.sourceId) || [];
+    existing.push(chunk.content);
+    knowledgeChunksBySource.set(chunk.sourceId, existing);
+  }
+
   // 5. Build dynamic system prompt
-  const systemPrompt = `You are the AI assistant for ${settingsMap.clinic_name || 'BrightSmile Dental Clinic'}.
+  const systemPrompt = `You are the AI assistant for ${clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic'}.
 
 CLINIC INFORMATION:
-- Name: ${settingsMap.clinic_name || 'BrightSmile Dental Clinic'}
-- Address: ${settingsMap.clinic_address || '123 Dental Street, Health City'}
-- Phone: ${settingsMap.clinic_phone || '(555) 100-2000'}
-- WhatsApp: ${settingsMap.whatsapp_number || ''}
-- Working Hours: ${settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}
-- Emergency Line: ${settingsMap.emergency_phone || '(555) 100-2001'}
+- Name: ${clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic'}
+- Address: ${clinic?.address || settingsMap.clinic_address || '123 Dental Street, Health City'}
+- Phone: ${clinic?.primaryPhone || settingsMap.clinic_phone || '(555) 100-2000'}
+- WhatsApp: ${clinic?.whatsappNumber || settingsMap.whatsapp_number || ''}
+- Working Hours: ${clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}
+- Appointment Rules: ${clinic?.appointmentRules || 'Appointments are preferred but walk-ins may be accepted.'}
+- Pricing Notes: ${clinic?.pricingNotes || 'Pricing depends on clinic guidance and treatment plan.'}
+- Emergency Instructions: ${clinic?.emergencyInstructions || settingsMap.emergency_response || 'Contact the clinic directly for urgent help.'}
+- Emergency Line: ${settingsMap.emergency_phone || clinic?.primaryPhone || '(555) 100-2001'}
 
 CURRENT TIME: ${new Date().toISOString()}
 CURRENT DAY: ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}
 
 AFTER-HOURS DETECTION:
-If the current time is outside working hours, begin your response by saying: "We're currently closed, but I can still help! Our hours are ${settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}. You can leave your details and our staff will contact you when we open."
+If the current time is outside working hours, begin your response by saying: "We're currently closed, but I can still help. Our hours are ${clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}. You can leave your details and our staff will contact you when we open."
 
 SERVICES OFFERED:
 ${services.map(s => `- ${s.name} (${s.department}): ${s.description}. Duration: ${s.duration}. ${s.requiresAppointment ? 'Appointment required.' : 'Walk-ins welcome.'} ${s.preparationInstructions ? 'Preparation: ' + s.preparationInstructions : ''} ${s.price ? 'Starting from: ' + s.price : ''}`).join('\n')}
@@ -62,19 +89,22 @@ ${doctors.map(d => `- Dr. ${d.name}: ${d.specialization}. Available: ${d.availab
 FREQUENTLY ASKED QUESTIONS:
 ${faqs.map(f => `Q: ${f.question}\nA: ${f.answer}`).join('\n\n')}
 
+CLINIC KNOWLEDGE BASE:
+${knowledgeSources.map((source) => `SOURCE: ${source.title}\n${(knowledgeChunksBySource.get(source.id) || []).join('\n')}`).join('\n\n')}
+
 IMPORTANT RULES:
-1. NEVER diagnose medical conditions. If a patient describes symptoms, guide them to the right department/service and suggest they consult a doctor. Use wording like: "I can't diagnose, but I can help you choose the right service or contact the clinic."
+1. NEVER diagnose medical conditions. If a patient describes symptoms, use wording like: "I can't diagnose medical conditions, but I can help you contact the clinic or choose the right service."
 2. For appointment requests, collect: name, phone number, preferred date, preferred time, and reason for visit. You can also ask if they have a preferred doctor.
-3. When you cannot confidently answer, say: "I'm not fully sure about that. I recommend contacting the clinic directly." Then suggest calling or WhatsApp.
+3. Answer only from the clinic information, FAQ, services, doctors, or clinic knowledge base above. When you cannot confidently answer from that information, say: "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly." Then suggest calling or WhatsApp.
 4. If someone asks about location, provide the address and mention nearby landmarks.
 5. If someone asks about WhatsApp, say they can continue the conversation on WhatsApp.
-6. For emergency dental issues, always provide the emergency phone number and recommend immediate professional care.
+6. For emergency questions, say: "If this is a medical emergency, please call local emergency services or visit the nearest emergency department." Then provide the clinic emergency contact if relevant.
 7. Be warm, professional, and empathetic. Match the tone: ${settingsMap.ai_personality || 'friendly_professional'}.
 8. When collecting information (appointments, leads), ask one piece of info at a time naturally in conversation.
 9. If the patient seems to want human help, encourage them to call or use WhatsApp.
 10. Always mention preparation instructions when discussing specific services.`;
 
-  return { systemPrompt, settingsMap };
+  return { systemPrompt, settingsMap, clinic };
 }
 
 // Check if current time is after hours
@@ -142,7 +172,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Build dynamic system prompt from DB
-    const { systemPrompt, settingsMap } = await buildSystemPrompt();
+    const { systemPrompt, settingsMap, clinic } = await buildSystemPrompt();
 
     let conversation;
 
@@ -150,11 +180,6 @@ export async function POST(request: NextRequest) {
       // Load existing conversation
       conversation = await db.conversation.findUnique({
         where: { id: conversationId },
-        include: {
-          messages: {
-            orderBy: { createdAt: 'asc' },
-          },
-        },
       });
 
       if (!conversation) {
@@ -177,9 +202,11 @@ export async function POST(request: NextRequest) {
           channel: 'web',
           status: 'active',
           subject: message.slice(0, 100),
-        },
-        include: {
-          messages: true,
+          sourcePage: '/',
+          helpfulStatus: 'unreviewed',
+          needsImprovement: false,
+          leadCaptured: false,
+          appointmentRequested: false,
         },
       });
     }
@@ -193,20 +220,26 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Load conversation history
+    const historyMessages = await db.message.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
     // Build messages array for LLM
-    const llmMessages: Array<{ role: string; content: string }> = [
+    const llmMessages: Array<{ role: 'user' | 'system' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
     ];
 
-    // Add conversation history
-    const historyMessages = conversation.messages
+    // Add conversation history (excluding current message)
+    const historyMessagesFiltered = historyMessages
       .filter((m) => m.id !== userMessage.id)
       .map((m) => ({
-        role: m.role as string,
+        role: m.role as 'user' | 'system' | 'assistant',
         content: m.content,
       }));
 
-    llmMessages.push(...historyMessages);
+    llmMessages.push(...historyMessagesFiltered);
 
     // Add current user message
     llmMessages.push({ role: 'user', content: message });
@@ -219,6 +252,10 @@ export async function POST(request: NextRequest) {
     });
 
     const aiResponse = completion.choices[0]?.message?.content || 'I apologize, I was unable to generate a response. Please try again.';
+    const lowerMessage = message.toLowerCase();
+    const lowerResponse = aiResponse.toLowerCase();
+    const appointmentRequested = /book|appointment|consultation|call me|contact me/.test(lowerMessage);
+    const needsImprovement = lowerResponse.includes("i'm not fully sure") || lowerResponse.includes("please contact the clinic directly");
 
     // Save assistant message
     const assistantMessage = await db.message.create({
@@ -239,19 +276,44 @@ export async function POST(request: NextRequest) {
       data: {
         messageCount,
         lastMessage: aiResponse.slice(0, 200),
+        appointmentRequested,
+        leadCaptured: appointmentRequested,
+        needsImprovement,
       },
     });
+
+    if (needsImprovement) {
+      const normalizedQuestion = message.trim().toLowerCase();
+      const existingUnanswered = await db.unansweredQuestion.findFirst({
+        where: {
+          question: message.trim(),
+          status: 'open',
+        },
+      });
+
+      if (!existingUnanswered && normalizedQuestion.length > 0) {
+        await db.unansweredQuestion.create({
+          data: {
+            conversationId: conversation.id,
+            question: message.trim(),
+            sourcePage: conversation.sourcePage || '/',
+            status: 'open',
+            answer: null,
+          },
+        });
+      }
+    }
 
     // Detect after hours
     const afterHours = isAfterHours(settingsMap);
 
     // Build clinic settings for frontend
     const clinicSettings = {
-      clinic_name: settingsMap.clinic_name || 'BrightSmile Dental Clinic',
-      clinic_address: settingsMap.clinic_address || '123 Dental Street, Health City',
-      clinic_phone: settingsMap.clinic_phone || '(555) 100-2000',
-      whatsapp_number: settingsMap.whatsapp_number || '',
-      clinic_hours: settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm',
+      clinic_name: clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic',
+      clinic_address: clinic?.address || settingsMap.clinic_address || '123 Dental Street, Health City',
+      clinic_phone: clinic?.primaryPhone || settingsMap.clinic_phone || '(555) 100-2000',
+      whatsapp_number: clinic?.whatsappNumber || settingsMap.whatsapp_number || '',
+      clinic_hours: clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm',
       emergency_phone: settingsMap.emergency_phone || '(555) 100-2001',
       bot_primary_color: settingsMap.bot_primary_color || '#059669',
       welcome_message: settingsMap.bot_welcome_message || settingsMap.greeting_message || 'Hi, welcome to BrightSmile Dental Clinic. How can I help you today?',

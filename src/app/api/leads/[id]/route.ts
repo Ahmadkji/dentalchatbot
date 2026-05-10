@@ -8,7 +8,7 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status, name, phone, question, preferredContact } = body;
+    const { status, name, phone, question, preferredContact, service, preferredDate, preferredTime, message, internalNote } = body;
 
     const existing = await db.lead.findUnique({ where: { id } });
 
@@ -25,6 +25,11 @@ export async function PATCH(
     if (phone !== undefined) data.phone = phone;
     if (question !== undefined) data.question = question;
     if (preferredContact !== undefined) data.preferredContact = preferredContact;
+    if (service !== undefined) data.service = service;
+    if (preferredDate !== undefined) data.preferredDate = preferredDate;
+    if (preferredTime !== undefined) data.preferredTime = preferredTime;
+    if (message !== undefined) data.message = message;
+    if (internalNote !== undefined) data.internalNote = internalNote;
 
     const lead = await db.lead.update({
       where: { id },

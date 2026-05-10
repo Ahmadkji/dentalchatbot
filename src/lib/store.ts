@@ -1,6 +1,16 @@
 import { create } from 'zustand'
 
-export type Page = 'dashboard' | 'conversations' | 'patients' | 'appointments' | 'chat' | 'services' | 'doctors' | 'leads' | 'appointment-requests' | 'faq' | 'settings'
+export type Page =
+  | 'dashboard'
+  | 'conversations'
+  | 'leads'
+  | 'unanswered-questions'
+  | 'clinic-profile'
+  | 'knowledge-base'
+  | 'faq'
+  | 'widget-install'
+  | 'customizations'
+  | 'settings'
 
 interface AppStore {
   activePage: Page

@@ -32,24 +32,15 @@ export async function PATCH(
     const appointment = await db.appointment.update({
       where: { id },
       data,
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            status: true,
-          },
-        },
-      },
     });
+
+    const aptPatient = await db.patient.findUnique({ where: { id: appointment.patientId } });
 
     // Return flattened response consistent with GET/POST
     return NextResponse.json({
       id: appointment.id,
       patientId: appointment.patientId,
-      patientName: appointment.patient.name,
+      patientName: aptPatient?.name ?? 'Unknown',
       date: appointment.date,
       time: appointment.time,
       duration: appointment.duration,

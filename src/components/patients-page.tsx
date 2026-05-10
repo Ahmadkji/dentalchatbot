@@ -201,8 +201,8 @@ export default function PatientsPage() {
       </div>
 
       {/* Patients Table */}
-      <div className="rounded-md border">
-        <Table>
+      <div className="rounded-md border bg-white">
+        <Table className="min-w-[500px] sm:min-w-[600px]">
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>

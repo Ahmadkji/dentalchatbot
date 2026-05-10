@@ -167,7 +167,7 @@ export default function AppointmentsPage() {
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
         <Tabs value={statusFilter} onValueChange={setStatusFilter}>
           <TabsList>
             <TabsTrigger value="all">All</TabsTrigger>
@@ -180,12 +180,12 @@ export default function AppointmentsPage() {
           type="date"
           value={dateFilter}
           onChange={(e) => setDateFilter(e.target.value)}
-          className="h-8 w-40 text-sm"
+          className="h-8 w-full text-sm sm:w-40"
         />
-        <div className="ml-auto">
+        <div className="w-full sm:ml-auto sm:w-auto">
           <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700">
+              <Button size="sm" className="h-8 w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">
                 <Plus className="size-3.5 mr-1" />
                 New Appointment
               </Button>
@@ -207,7 +207,7 @@ export default function AppointmentsPage() {
                     placeholder="John Doe"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="appt-date">Date *</Label>
                     <Input
@@ -227,7 +227,7 @@ export default function AppointmentsPage() {
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="appt-duration">Duration (min)</Label>
                     <Input
@@ -286,8 +286,8 @@ export default function AppointmentsPage() {
       </div>
 
       {/* Appointments Table */}
-      <div className="rounded-md border">
-        <Table>
+      <div className="rounded-md border bg-white">
+        <Table className="min-w-[520px] sm:min-w-[700px]">
           <TableHeader>
             <TableRow>
               <TableHead>Patient</TableHead>

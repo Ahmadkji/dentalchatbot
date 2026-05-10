@@ -10,20 +10,6 @@ export async function GET(
 
     const conversation = await db.conversation.findUnique({
       where: { id },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            status: true,
-          },
-        },
-        messages: {
-          orderBy: { createdAt: 'asc' },
-        },
-      },
     });
 
     if (!conversation) {
@@ -33,19 +19,46 @@ export async function GET(
       );
     }
 
+    const convMessages = await db.message.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+    const events = await db.interactionEvent.findMany({ where: { conversationId: id } })
+    const counts = events.reduce(
+      (acc, event) => {
+        if (event.eventType === 'whatsapp_click') acc.whatsapp += 1
+        if (event.eventType === 'location_click') acc.location += 1
+        if (event.eventType === 'directions_click') acc.directions += 1
+        if (event.eventType === 'call_click') acc.call += 1
+        return acc
+      },
+      { whatsapp: 0, location: 0, directions: 0, call: 0 }
+    )
+
+    const convPatient = await db.patient.findUnique({ where: { id: conversation.patientId } });
+
     // Return flattened conversation with messages
     return NextResponse.json({
       id: conversation.id,
       patientId: conversation.patientId,
-      patientName: conversation.patient.name,
+      patientName: convPatient?.name ?? 'Unknown',
       channel: conversation.channel,
       status: conversation.status,
       subject: conversation.subject,
       messageCount: conversation.messageCount,
       lastMessage: conversation.lastMessage,
+      sourcePage: conversation.sourcePage,
+      helpfulStatus: conversation.helpfulStatus,
+      needsImprovement: conversation.needsImprovement,
+      leadCaptured: conversation.leadCaptured,
+      appointmentRequested: conversation.appointmentRequested,
+      whatsappClicks: counts.whatsapp,
+      locationClicks: counts.location,
+      directionsClicks: counts.directions,
+      callClicks: counts.call,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
-      messages: conversation.messages,
+      messages: convMessages,
     });
   } catch (error) {
     console.error('Error fetching conversation:', error);
@@ -63,11 +76,18 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status } = body;
+    const { status, helpfulStatus, needsImprovement, leadCaptured, appointmentRequested, sourcePage } = body;
 
-    if (!status) {
+    if (
+      status === undefined &&
+      helpfulStatus === undefined &&
+      needsImprovement === undefined &&
+      leadCaptured === undefined &&
+      appointmentRequested === undefined &&
+      sourcePage === undefined
+    ) {
       return NextResponse.json(
-        { error: 'status is required' },
+        { error: 'At least one update field is required' },
         { status: 400 }
       );
     }
@@ -85,30 +105,48 @@ export async function PATCH(
 
     const conversation = await db.conversation.update({
       where: { id },
-      data: { status },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            status: true,
-          },
-        },
+      data: {
+        ...(status !== undefined ? { status } : {}),
+        ...(helpfulStatus !== undefined ? { helpfulStatus } : {}),
+        ...(needsImprovement !== undefined ? { needsImprovement } : {}),
+        ...(leadCaptured !== undefined ? { leadCaptured } : {}),
+        ...(appointmentRequested !== undefined ? { appointmentRequested } : {}),
+        ...(sourcePage !== undefined ? { sourcePage } : {}),
       },
     });
+
+    const convPatient = await db.patient.findUnique({ where: { id: conversation.patientId } });
+    const events = await db.interactionEvent.findMany({ where: { conversationId: id } })
+    const counts = events.reduce(
+      (acc, event) => {
+        if (event.eventType === 'whatsapp_click') acc.whatsapp += 1
+        if (event.eventType === 'location_click') acc.location += 1
+        if (event.eventType === 'directions_click') acc.directions += 1
+        if (event.eventType === 'call_click') acc.call += 1
+        return acc
+      },
+      { whatsapp: 0, location: 0, directions: 0, call: 0 }
+    )
 
     // Return flattened response consistent with list endpoint
     return NextResponse.json({
       id: conversation.id,
       patientId: conversation.patientId,
-      patientName: conversation.patient.name,
+      patientName: convPatient?.name ?? 'Unknown',
       channel: conversation.channel,
       status: conversation.status,
       subject: conversation.subject,
       messageCount: conversation.messageCount,
       lastMessage: conversation.lastMessage,
+      sourcePage: conversation.sourcePage,
+      helpfulStatus: conversation.helpfulStatus,
+      needsImprovement: conversation.needsImprovement,
+      leadCaptured: conversation.leadCaptured,
+      appointmentRequested: conversation.appointmentRequested,
+      whatsappClicks: counts.whatsapp,
+      locationClicks: counts.location,
+      directionsClicks: counts.directions,
+      callClicks: counts.call,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     });

@@ -284,7 +284,7 @@ export default function FAQPage() {
           rows={4}
         />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="faq-order">Display Order</Label>
           <Input
@@ -309,7 +309,7 @@ export default function FAQPage() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 max-w-sm min-w-[180px]">
+        <div className="relative w-full min-w-[180px] sm:max-w-sm sm:flex-1">
           <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
           <Input
             placeholder="Search FAQs..."
@@ -321,7 +321,7 @@ export default function FAQPage() {
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <Button
             size="sm"
-            className="h-8 bg-emerald-600 hover:bg-emerald-700"
+            className="h-8 w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
             onClick={() => {
               setForm({ ...emptyForm, order: faqs.length + 1 })
               setAddDialogOpen(true)
@@ -353,9 +353,9 @@ export default function FAQPage() {
       </div>
 
       {/* FAQs Table */}
-      <div className="rounded-md border">
+      <div className="rounded-md border bg-white">
         <div className="max-h-[600px] overflow-y-auto">
-          <Table>
+          <Table className="min-w-[500px] sm:min-w-[600px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[60px]">Order</TableHead>

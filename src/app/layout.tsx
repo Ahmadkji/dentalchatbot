@@ -18,6 +18,7 @@ export const metadata: Metadata = {
   description: "AI-powered dental clinic management dashboard with intelligent chatbot assistant.",
   keywords: ["dental", "clinic", "AI", "chatbot", "dashboard", "DentBot"],
   authors: [{ name: "DentBot" }],
+  viewport: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
 };
 
 export default function RootLayout({

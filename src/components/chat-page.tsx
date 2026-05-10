@@ -7,6 +7,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Bot,
   Send,
@@ -23,8 +26,16 @@ import {
   Calendar,
   HelpCircle,
   Stethoscope,
+  PanelLeft,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import { useIsMobile } from '@/hooks/use-mobile'
 
 interface ChatMessage {
   id: string
@@ -54,6 +65,26 @@ interface ClinicSettings {
   bot_welcome_message: string
   bot_primary_color: string
   after_hours_message: string
+  input_placeholder?: string
+  cta_text?: string
+  cta_link?: string
+}
+
+interface QuickPrompt {
+  id: string
+  label: string
+  message: string
+  actionType: 'message' | 'appointment' | 'link'
+  actionValue: string | null
+  isActive: boolean
+}
+
+interface Service {
+  id: string
+  name: string
+  description: string
+  price: string | null
+  isActive: boolean
 }
 
 const DEFAULT_SETTINGS: ClinicSettings = {
@@ -65,10 +96,13 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   emergency_phone: '(555) 100-2001',
   parking_info: 'Free parking in building garage. Enter from Elm Street, validated for 2 hours.',
   google_maps_url: 'https://maps.google.com/?q=123+Smile+Avenue+Springfield+IL',
-  bot_name: 'DentBot',
-  bot_welcome_message: "Hello! Welcome to BrightSmile Dental Clinic. I'm DentBot, your AI dental assistant. How can I help you today?",
+  bot_name: 'BrightSmile AI',
+  bot_welcome_message: "Hello! I'm BrightSmile AI, your website assistant for appointments, treatments, and clinic details. How can I help?",
   bot_primary_color: '#059669',
   after_hours_message: "We're currently closed. Leave a message and we'll respond when we open.",
+  input_placeholder: 'Ask about treatments, pricing, timings, or appointments...',
+  cta_text: 'Book Appointment',
+  cta_link: '',
 }
 
 function isAfterHours(hours: string): boolean {
@@ -94,10 +128,10 @@ function isAfterHours(hours: string): boolean {
   return currentTime < open || currentTime >= close
 }
 
-function WhatsAppButton({ number }: { number: string }) {
+function WhatsAppButton({ number, onTrack }: { number: string; onTrack?: () => void }) {
   const url = `https://wa.me/${number}?text=${encodeURIComponent('Hi, I would like to inquire about your dental services.')}`
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer">
+    <a href={url} target="_blank" rel="noopener noreferrer" onClick={onTrack}>
       <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white text-xs gap-1.5">
         <Phone className="size-3" />
         Chat on WhatsApp
@@ -106,7 +140,7 @@ function WhatsAppButton({ number }: { number: string }) {
   )
 }
 
-function LocationCard({ settings }: { settings: ClinicSettings }) {
+function LocationCard({ settings, onLocationClick, onDirectionsClick }: { settings: ClinicSettings; onLocationClick?: () => void; onDirectionsClick?: () => void }) {
   return (
     <Card className="border-emerald-200 bg-emerald-50/50">
       <CardContent className="p-3 space-y-2">
@@ -118,13 +152,13 @@ function LocationCard({ settings }: { settings: ClinicSettings }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer">
+          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer" onClick={onLocationClick}>
             <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
               <ExternalLink className="size-3" />
               Open in Google Maps
             </Button>
           </a>
-          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer">
+          <a href={settings.google_maps_url} target="_blank" rel="noopener noreferrer" onClick={onDirectionsClick}>
             <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
               <Navigation className="size-3" />
               Get Directions
@@ -161,7 +195,7 @@ function AfterHoursCard({ settings }: { settings: ClinicSettings }) {
   )
 }
 
-function StaffHandoff({ settings }: { settings: ClinicSettings }) {
+function StaffHandoff({ settings, onCallClick, onWhatsAppClick }: { settings: ClinicSettings; onCallClick?: () => void; onWhatsAppClick?: () => void }) {
   const whatsappUrl = `https://wa.me/${settings.whatsapp_number}?text=${encodeURIComponent('Hi, I would like to inquire about your dental services.')}`
   return (
     <Card className="border-emerald-200 bg-emerald-50/30">
@@ -169,7 +203,7 @@ function StaffHandoff({ settings }: { settings: ClinicSettings }) {
         <p className="text-xs font-medium text-emerald-700">Need to speak with our team?</p>
         <div className="flex flex-wrap gap-1.5">
           {settings.clinic_phone && (
-            <a href={`tel:${settings.clinic_phone}`}>
+            <a href={`tel:${settings.clinic_phone}`} onClick={onCallClick}>
               <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1">
                 <Phone className="size-3" />
                 Call Clinic
@@ -177,7 +211,7 @@ function StaffHandoff({ settings }: { settings: ClinicSettings }) {
             </a>
           )}
           {settings.whatsapp_number && (
-            <a href={whatsappUrl} target="_blank" rel="noopener noreferrer">
+            <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" onClick={onWhatsAppClick}>
               <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1 text-green-600 border-green-300">
                 <MessageCircle className="size-3" />
                 WhatsApp
@@ -194,21 +228,81 @@ function StaffHandoff({ settings }: { settings: ClinicSettings }) {
   )
 }
 
-function StructuredMessage({ content, settings }: { content: string; settings: ClinicSettings }) {
+function ServiceCards({
+  services,
+  onAsk,
+  onBook,
+}: {
+  services: Service[]
+  onAsk: (service: Service) => void
+  onBook: (service: Service) => void
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {services.slice(0, 6).map((service) => (
+        <Card key={service.id} className="border-slate-200 bg-white">
+          <CardContent className="p-3 space-y-2">
+            <p className="text-sm font-medium">{service.name}</p>
+            <p className="text-xs text-muted-foreground line-clamp-2">{service.description}</p>
+            {service.price && <p className="text-xs text-emerald-700 font-medium">Starting from {service.price}</p>}
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => onAsk(service)}>
+                Ask about this
+              </Button>
+              <Button size="sm" className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700" onClick={() => onBook(service)}>
+                Book appointment
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+function StructuredMessage({
+  content,
+  settings,
+  services,
+  onAskService,
+  onBookService,
+  onTrackWhatsApp,
+  onTrackCall,
+  onTrackLocation,
+  onTrackDirections,
+}: {
+  content: string
+  settings: ClinicSettings
+  services: Service[]
+  onAskService: (service: Service) => void
+  onBookService: (service: Service) => void
+  onTrackWhatsApp: () => void
+  onTrackCall: () => void
+  onTrackLocation: () => void
+  onTrackDirections: () => void
+}) {
   const lower = content.toLowerCase()
   const showWhatsApp = lower.includes('whatsapp') || lower.includes('whats app')
   const showLocation = lower.includes('location') || lower.includes('address') || lower.includes('direction') || lower.includes('find us') || lower.includes('where') || lower.includes('located')
   const showAfterHours = lower.includes('closed') || lower.includes('after hours') || lower.includes('after-hours') || lower.includes('after hour')
   const showHandoff = lower.includes('call us') || lower.includes('contact us') || lower.includes('call our') || lower.includes('reach us') || lower.includes('speak with') || lower.includes('talk to') || lower.includes('our team') || lower.includes('our staff')
+  const showServiceCards = lower.includes('service') || lower.includes('treatment') || lower.includes('do you offer') || lower.includes('what do you offer')
 
   return (
     <div className="space-y-2">
       <div className="whitespace-pre-wrap">{content}</div>
       <div className="space-y-2 mt-2">
-        {showLocation && <LocationCard settings={settings} />}
-        {showWhatsApp && <WhatsAppButton number={settings.whatsapp_number} />}
+        {showLocation && <LocationCard settings={settings} onLocationClick={onTrackLocation} onDirectionsClick={onTrackDirections} />}
+        {showWhatsApp && <WhatsAppButton number={settings.whatsapp_number} onTrack={onTrackWhatsApp} />}
         {showAfterHours && <AfterHoursCard settings={settings} />}
-        {showHandoff && <StaffHandoff settings={settings} />}
+        {showHandoff && <StaffHandoff settings={settings} onCallClick={onTrackCall} onWhatsAppClick={onTrackWhatsApp} />}
+        {showServiceCards && services.length > 0 && (
+          <ServiceCards
+            services={services}
+            onAsk={onAskService}
+            onBook={onBookService}
+          />
+        )}
       </div>
     </div>
   )
@@ -223,7 +317,25 @@ export default function ChatPage() {
   const [loadingConvs, setLoadingConvs] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [settings, setSettings] = useState<ClinicSettings>(DEFAULT_SETTINGS)
+  const [services, setServices] = useState<Service[]>([])
+  const [quickPrompts, setQuickPrompts] = useState<QuickPrompt[]>([])
   const [afterHours, setAfterHours] = useState(false)
+  const [appointmentOpen, setAppointmentOpen] = useState(false)
+  const [appointmentSubmitting, setAppointmentSubmitting] = useState(false)
+  const [appointmentForm, setAppointmentForm] = useState({
+    name: '',
+    phone: '',
+    service: '',
+    preferredDate: '',
+    preferredTime: '',
+    preferredDoctor: '',
+    forSelfOrChild: '',
+    hadBracesBefore: '',
+    wantsConsultation: '',
+    message: '',
+  })
+  const [mobileConvOpen, setMobileConvOpen] = useState(false)
+  const isMobile = useIsMobile()
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const fetchConversations = useCallback(async () => {
@@ -242,37 +354,99 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => {
-    fetchConversations()
+    const timer = window.setTimeout(() => {
+      void fetchConversations()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
   }, [fetchConversations])
+
+  useEffect(() => {
+    async function fetchServices() {
+      try {
+        const res = await fetch('/api/services')
+        if (!res.ok) return
+        const data = await res.json()
+        const allServices = Array.isArray(data) ? data : (data.services || [])
+        setServices(allServices.filter((service: Service) => service.isActive !== false))
+      } catch {
+        setServices([])
+      }
+    }
+
+    void fetchServices()
+  }, [])
 
   // Fetch clinic settings
   useEffect(() => {
     async function fetchSettings() {
       try {
-        const res = await fetch('/api/settings')
-        if (res.ok) {
-          const data = await res.json()
+        const [settingsRes, clinicRes, widgetRes, promptsRes] = await Promise.all([
+          fetch('/api/settings'),
+          fetch('/api/clinic'),
+          fetch('/api/widget-settings'),
+          fetch('/api/widget-settings/quick-prompts'),
+        ])
+
+        const settingsMap: Record<string, string> = {}
+        if (settingsRes.ok) {
+          const data = await settingsRes.json()
           const settingsList = data.settings || []
-          const settingsMap: Record<string, string> = {}
           settingsList.forEach((s: { key: string; value: string }) => {
             settingsMap[s.key] = s.value
           })
-          setSettings({
-            clinic_name: settingsMap.clinic_name || DEFAULT_SETTINGS.clinic_name,
-            clinic_address: settingsMap.clinic_address || DEFAULT_SETTINGS.clinic_address,
-            clinic_phone: settingsMap.clinic_phone || DEFAULT_SETTINGS.clinic_phone,
-            clinic_hours: settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours,
-            whatsapp_number: settingsMap.whatsapp_number || DEFAULT_SETTINGS.whatsapp_number,
-            emergency_phone: settingsMap.emergency_phone || DEFAULT_SETTINGS.emergency_phone,
-            parking_info: settingsMap.parking_info || DEFAULT_SETTINGS.parking_info,
-            google_maps_url: settingsMap.google_maps_url || DEFAULT_SETTINGS.google_maps_url,
-            bot_name: settingsMap.bot_name || DEFAULT_SETTINGS.bot_name,
-            bot_welcome_message: settingsMap.bot_welcome_message || DEFAULT_SETTINGS.bot_welcome_message,
-            bot_primary_color: settingsMap.bot_primary_color || DEFAULT_SETTINGS.bot_primary_color,
-            after_hours_message: settingsMap.after_hours_message || DEFAULT_SETTINGS.after_hours_message,
-          })
-          setAfterHours(isAfterHours(settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours))
         }
+
+        let clinic: Partial<ClinicSettings> & {
+          name?: string
+          address?: string
+          primaryPhone?: string
+          whatsappNumber?: string
+          openingHours?: string
+          emergencyInstructions?: string
+        } = {}
+
+        if (clinicRes.ok) {
+          clinic = await clinicRes.json()
+        }
+
+        let widgetSettings: Partial<ClinicSettings> & {
+          botName?: string
+          welcomeMessage?: string
+          inputPlaceholder?: string
+          ctaText?: string
+          ctaLink?: string
+        } = {}
+
+        if (widgetRes.ok) {
+          widgetSettings = await widgetRes.json()
+        }
+
+        if (promptsRes.ok) {
+          const promptsData = await promptsRes.json()
+          setQuickPrompts((Array.isArray(promptsData) ? promptsData : []).filter((prompt) => prompt.isActive))
+        }
+
+        const mergedSettings = {
+          clinic_name: clinic.clinic_name || clinic.name || settingsMap.clinic_name || DEFAULT_SETTINGS.clinic_name,
+          clinic_address: clinic.clinic_address || clinic.address || settingsMap.clinic_address || DEFAULT_SETTINGS.clinic_address,
+          clinic_phone: clinic.clinic_phone || clinic.primaryPhone || settingsMap.clinic_phone || DEFAULT_SETTINGS.clinic_phone,
+          clinic_hours: clinic.clinic_hours || clinic.openingHours || settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours,
+          whatsapp_number: clinic.whatsapp_number || clinic.whatsappNumber || settingsMap.whatsapp_number || DEFAULT_SETTINGS.whatsapp_number,
+          emergency_phone: settingsMap.emergency_phone || DEFAULT_SETTINGS.emergency_phone,
+          parking_info: settingsMap.parking_info || DEFAULT_SETTINGS.parking_info,
+          google_maps_url: settingsMap.google_maps_url || DEFAULT_SETTINGS.google_maps_url,
+          bot_name: widgetSettings.botName || settingsMap.bot_name || DEFAULT_SETTINGS.bot_name,
+          bot_welcome_message: widgetSettings.welcomeMessage || settingsMap.bot_welcome_message || DEFAULT_SETTINGS.bot_welcome_message,
+          bot_primary_color: settingsMap.bot_primary_color || DEFAULT_SETTINGS.bot_primary_color,
+          after_hours_message: settingsMap.after_hours_message || clinic.emergencyInstructions || DEFAULT_SETTINGS.after_hours_message,
+          input_placeholder: widgetSettings.inputPlaceholder || DEFAULT_SETTINGS.input_placeholder,
+          cta_text: widgetSettings.ctaText || DEFAULT_SETTINGS.cta_text,
+          cta_link: widgetSettings.ctaLink || DEFAULT_SETTINGS.cta_link,
+        }
+
+        setSettings(mergedSettings)
+        setAfterHours(isAfterHours(mergedSettings.clinic_hours))
       } catch {
         // Use defaults
         setAfterHours(isAfterHours(DEFAULT_SETTINGS.clinic_hours))
@@ -298,15 +472,40 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (activeConvId) {
-      fetchMessages(activeConvId)
+      const timer = window.setTimeout(() => {
+        void fetchMessages(activeConvId)
+      }, 0)
+
+      return () => window.clearTimeout(timer)
     } else {
-      setMessages([])
+      const timer = window.setTimeout(() => {
+        setMessages([])
+      }, 0)
+
+      return () => window.clearTimeout(timer)
     }
   }, [activeConvId, fetchMessages])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  const trackEvent = useCallback(async (eventType: 'whatsapp_click' | 'call_click' | 'location_click' | 'directions_click' | 'appointment_request', service?: string) => {
+    try {
+      await fetch('/api/analytics/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: activeConvId || null,
+          eventType,
+          source: 'playground',
+          service: service || null,
+        }),
+      })
+    } catch {
+      // analytics events are non-blocking
+    }
+  }, [activeConvId])
 
   const handleSend = async (messageText?: string) => {
     const message = (messageText || input).trim()
@@ -372,28 +571,124 @@ export default function ChatPage() {
     setMessages([])
   }
 
-  const quickReplies = [
-    { emoji: '📅', label: 'Book Appointment', message: "I'd like to book an appointment" },
-    { emoji: '📍', label: 'Clinic Location', message: 'Where is the clinic located?' },
-    { emoji: '🕐', label: 'Opening Hours', message: 'What are your opening hours?' },
-    { emoji: '🦷', label: 'Our Services', message: 'What dental services do you offer?' },
-    { emoji: '💬', label: 'Chat on WhatsApp', message: 'How can I contact you on WhatsApp?' },
-    { emoji: '❓', label: 'FAQs', message: 'What are your frequently asked questions?' },
-  ]
+  const quickReplies = quickPrompts.length > 0
+    ? quickPrompts
+    : [
+        { id: 'default-1', label: 'Book Appointment', message: "I'd like to book an appointment", actionType: 'appointment', actionValue: null, isActive: true },
+        { id: 'default-2', label: 'Tooth Pain', message: 'I have tooth pain. What should I do?', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-3', label: 'Braces', message: 'Tell me about braces and aligners.', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-4', label: 'Root Canal', message: 'Tell me about root canal treatment.', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-5', label: 'Teeth Cleaning', message: 'What is included in dental cleaning?', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-6', label: 'Clinic Location', message: 'Where is the clinic located?', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-7', label: 'WhatsApp Clinic', message: 'How can I contact you on WhatsApp?', actionType: 'link', actionValue: settings.cta_link || null, isActive: true },
+        { id: 'default-8', label: 'Consultation Fee', message: 'What is the consultation fee?', actionType: 'message', actionValue: null, isActive: true },
+      ]
 
-  const quickActionButtons = [
-    { label: 'Book Appointment', icon: Calendar, message: "I'd like to book an appointment" },
-    { label: 'Location', icon: MapPin, message: 'Where is the clinic located?' },
-    { label: 'Hours', icon: Clock, message: 'What are your opening hours?' },
-    { label: 'WhatsApp', icon: MessageCircle, message: 'How can I contact you on WhatsApp?' },
-    { label: 'Services', icon: Stethoscope, message: 'What dental services do you offer?' },
-  ]
+  const quickActionButtons = quickReplies.slice(0, 5)
 
-  const botName = settings.bot_name || 'DentBot'
+  const handlePromptAction = (prompt: QuickPrompt) => {
+    if (prompt.actionType === 'appointment') {
+      setAppointmentOpen(true)
+      return
+    }
+
+    if (prompt.actionType === 'link' && prompt.actionValue) {
+      void trackEvent('whatsapp_click')
+      window.open(prompt.actionValue, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    void handleSend(prompt.message)
+  }
+
+  const handleAppointmentSubmit = async () => {
+    if (!appointmentForm.name.trim() || !appointmentForm.phone.trim() || !appointmentForm.preferredDate.trim() || !appointmentForm.preferredTime.trim()) {
+      toast.error('Name, phone, preferred date, and preferred time are required')
+      return
+    }
+
+    setAppointmentSubmitting(true)
+    try {
+      const reason = `${appointmentForm.service ? `${appointmentForm.service}. ` : ''}${appointmentForm.message}`.trim()
+      const qualificationNotes = [
+        appointmentForm.forSelfOrChild ? `For: ${appointmentForm.forSelfOrChild}` : null,
+        appointmentForm.hadBracesBefore ? `Braces before: ${appointmentForm.hadBracesBefore}` : null,
+        appointmentForm.wantsConsultation ? `Consultation intent: ${appointmentForm.wantsConsultation}` : null,
+      ].filter(Boolean).join(' | ')
+
+      const [leadRes, requestRes] = await Promise.all([
+        fetch('/api/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: appointmentForm.name,
+            phone: appointmentForm.phone,
+            question: reason || 'Appointment request from chat widget',
+            service: appointmentForm.service || null,
+            preferredDate: appointmentForm.preferredDate,
+            preferredTime: appointmentForm.preferredTime,
+            message: appointmentForm.message || null,
+            internalNote: qualificationNotes || null,
+            preferredContact: 'phone',
+            source: 'chatbot',
+          }),
+        }),
+        fetch('/api/appointment-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: appointmentForm.name,
+            phone: appointmentForm.phone,
+            preferredDate: appointmentForm.preferredDate,
+            preferredTime: appointmentForm.preferredTime,
+            reason,
+            preferredDoctor: appointmentForm.preferredDoctor || null,
+            source: 'chatbot',
+          }),
+        }),
+      ])
+
+      if (!leadRes.ok || !requestRes.ok) throw new Error('Failed to create appointment request')
+
+      const confirmationMessage = `I want to request an appointment. Name: ${appointmentForm.name}. Phone: ${appointmentForm.phone}. Service: ${appointmentForm.service || 'Not specified'}. Preferred date: ${appointmentForm.preferredDate}. Preferred time: ${appointmentForm.preferredTime}. Notes: ${appointmentForm.message || 'None'}.`
+
+      setAppointmentOpen(false)
+      setAppointmentForm({
+        name: '',
+        phone: '',
+        service: '',
+        preferredDate: '',
+        preferredTime: '',
+        preferredDoctor: '',
+        forSelfOrChild: '',
+        hadBracesBefore: '',
+        wantsConsultation: '',
+        message: '',
+      })
+      void trackEvent('appointment_request', appointmentForm.service || undefined)
+      toast.success('Appointment request captured')
+      void handleSend(confirmationMessage)
+    } catch {
+      toast.error('Failed to capture appointment request')
+    } finally {
+      setAppointmentSubmitting(false)
+    }
+  }
+
+  const botName = settings.bot_name || 'BrightSmile AI'
+
+  const askAboutService = (service: Service) => {
+    void handleSend(`Tell me more about ${service.name}, including price and preparation instructions.`)
+  }
+
+  const bookForService = (service: Service) => {
+    setAppointmentForm((prev) => ({ ...prev, service: service.name }))
+    setAppointmentOpen(true)
+  }
 
   return (
-    <div className="flex h-[calc(100vh-12rem)] gap-0 border rounded-md overflow-hidden">
-      {/* Left Panel - Conversations List */}
+    <div className="flex h-[calc(100vh-8rem)] sm:h-[calc(100vh-12rem)] gap-0 border rounded-md overflow-hidden">
+      {/* Left Panel - Conversations List (Desktop) */}
       <div className="w-72 border-r bg-white flex flex-col shrink-0 hidden md:flex">
         <div className="p-3 border-b flex items-center justify-between">
           <h3 className="text-sm font-medium">Conversations</h3>
@@ -439,20 +734,88 @@ export default function ChatPage() {
         </ScrollArea>
       </div>
 
+      {/* Mobile Conversation Sheet */}
+      <Sheet open={mobileConvOpen} onOpenChange={setMobileConvOpen}>
+        <SheetContent side="left" className="w-72 p-0">
+          <SheetHeader className="p-3 border-b">
+            <div className="flex items-center justify-between">
+              <SheetTitle className="text-sm">Conversations</SheetTitle>
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 gap-1"
+                onClick={() => { startNewChat(); setMobileConvOpen(false) }}
+              >
+                <Plus className="size-3" />
+                New Chat
+              </Button>
+            </div>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto">
+            {loadingConvs ? (
+              <div className="p-3 space-y-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </div>
+            ) : conversations.length > 0 ? (
+              <div className="p-1">
+                {conversations.map((conv) => (
+                  <button
+                    key={conv.id}
+                    onClick={() => { setActiveConvId(conv.id); setMobileConvOpen(false) }}
+                    className={`w-full text-left px-3 py-2.5 rounded-md text-sm transition-colors ${
+                      activeConvId === conv.id
+                        ? 'bg-emerald-50 text-emerald-800'
+                        : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <div className="font-medium truncate text-xs">{conv.patientName || 'Unknown'}</div>
+                    <div className="text-muted-foreground text-xs truncate mt-0.5">
+                      {conv.lastMessage || 'No messages'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-muted-foreground text-xs py-6">No conversations yet</p>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
       {/* Right Panel - Chat */}
-      <div className="flex-1 flex flex-col bg-gray-50/50">
+      <div className="flex-1 flex flex-col bg-gray-50/50 min-w-0">
         {/* Chat Header */}
-        <div className="px-4 py-2.5 border-b bg-white flex items-center gap-2">
+        <div className="px-3 sm:px-4 py-2.5 border-b bg-white flex items-center gap-2">
+          {/* Mobile: conversation list toggle */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 w-9 p-0 md:hidden"
+            onClick={() => setMobileConvOpen(true)}
+          >
+            <PanelLeft className="size-4" />
+          </Button>
           <div className="flex size-7 items-center justify-center rounded-full bg-emerald-100">
             <Bot className="size-3.5 text-emerald-700" />
           </div>
-          <div>
-            <p className="text-sm font-medium">{botName} Assistant</p>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium truncate">{botName} Assistant</p>
             <p className="text-[10px] text-muted-foreground">
               {activeConvId ? 'Active conversation' : 'New conversation'}
             </p>
           </div>
-          <Badge variant="outline" className="ml-auto text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+          {/* Mobile: New Chat button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 w-9 p-0 md:hidden"
+            onClick={startNewChat}
+          >
+            <Plus className="size-4" />
+          </Button>
+          <Badge variant="outline" className="ml-auto text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 hidden sm:inline-flex">
             <Sparkles className="size-2.5 mr-0.5" />
             AI Powered
           </Badge>
@@ -500,7 +863,17 @@ export default function ChatPage() {
                         }`}
                       >
                         {msg.role === 'assistant' ? (
-                          <StructuredMessage content={msg.content} settings={settings} />
+                          <StructuredMessage
+                            content={msg.content}
+                            settings={settings}
+                            services={services}
+                            onAskService={askAboutService}
+                            onBookService={bookForService}
+                            onTrackWhatsApp={() => void trackEvent('whatsapp_click')}
+                            onTrackCall={() => void trackEvent('call_click')}
+                            onTrackLocation={() => void trackEvent('location_click')}
+                            onTrackDirections={() => void trackEvent('directions_click')}
+                          />
                         ) : (
                           msg.content
                         )}
@@ -527,11 +900,10 @@ export default function ChatPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-w-lg">
                 {quickReplies.map((qr) => (
                   <button
-                    key={qr.label}
-                    onClick={() => handleSend(qr.message)}
+                    key={qr.id}
+                    onClick={() => handlePromptAction(qr)}
                     className="flex items-center gap-1.5 border rounded-lg px-3 py-2.5 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors text-left"
                   >
-                    <span className="text-base">{qr.emoji}</span>
                     <span className="text-xs font-medium">{qr.label}</span>
                   </button>
                 ))}
@@ -544,32 +916,42 @@ export default function ChatPage() {
         <div className="px-4 py-1.5 border-t bg-white flex gap-1.5 overflow-x-auto">
           {quickActionButtons.map((btn) => (
             <button
-              key={btn.label}
-              onClick={() => handleSend(btn.message)}
+              key={btn.id}
+              onClick={() => handlePromptAction(btn)}
               className="flex items-center gap-1 border rounded-full px-2.5 py-1 text-[11px] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0"
             >
-              <btn.icon className="size-3" />
               {btn.label}
             </button>
           ))}
+          {settings.cta_text && settings.cta_link && (
+            <a
+              href={settings.cta_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => void trackEvent('whatsapp_click')}
+              className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap shrink-0 text-white"
+              style={{ backgroundColor: settings.bot_primary_color }}
+            >
+              {settings.cta_text}
+            </a>
+          )}
         </div>
 
-        {/* Input Area */}
-        <div className="p-3 border-t bg-white">
+          <div className="p-3 sm:p-4 border-t bg-white">
           <div className="flex gap-2 max-w-2xl mx-auto">
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={`Message ${botName}...`}
-              className="h-9 text-sm"
+              placeholder={settings.input_placeholder || `Message ${botName}...`}
+              className="h-10 sm:h-9 text-sm"
               disabled={sending}
             />
             <Button
               onClick={() => handleSend()}
               disabled={sending || !input.trim()}
               size="sm"
-              className="h-9 bg-emerald-600 hover:bg-emerald-700 px-3"
+              className="h-10 sm:h-9 bg-emerald-600 hover:bg-emerald-700 px-3"
             >
               <Send className="size-3.5" />
             </Button>
@@ -579,6 +961,67 @@ export default function ChatPage() {
           </p>
         </div>
       </div>
+
+      <Dialog open={appointmentOpen} onOpenChange={setAppointmentOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Request Appointment</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-2">
+              <Label>Name</Label>
+              <Input value={appointmentForm.name} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, name: e.target.value }))} />
+            </div>
+            <div className="grid gap-2">
+              <Label>Phone Number</Label>
+              <Input value={appointmentForm.phone} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, phone: e.target.value }))} />
+            </div>
+            <div className="grid gap-2">
+              <Label>Service Needed</Label>
+              <Input value={appointmentForm.service} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, service: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Preferred Date</Label>
+                <Input type="date" value={appointmentForm.preferredDate} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, preferredDate: e.target.value }))} />
+              </div>
+              <div className="grid gap-2">
+                <Label>Preferred Time</Label>
+                <Input type="time" value={appointmentForm.preferredTime} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, preferredTime: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label>Preferred Doctor (optional)</Label>
+              <Input value={appointmentForm.preferredDoctor} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, preferredDoctor: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-1 gap-3 rounded-md border bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-700">Quick qualification (non-medical)</p>
+              <div className="grid gap-2">
+                <Label>Is this for yourself or a child?</Label>
+                <Input value={appointmentForm.forSelfOrChild} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, forSelfOrChild: e.target.value }))} placeholder="Myself / Child" />
+              </div>
+              <div className="grid gap-2">
+                <Label>Have you had braces before? (optional)</Label>
+                <Input value={appointmentForm.hadBracesBefore} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, hadBracesBefore: e.target.value }))} placeholder="Yes / No / Not sure" />
+              </div>
+              <div className="grid gap-2">
+                <Label>Do you want a consultation appointment?</Label>
+                <Input value={appointmentForm.wantsConsultation} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, wantsConsultation: e.target.value }))} placeholder="Yes / No" />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label>Message</Label>
+              <Textarea rows={4} value={appointmentForm.message} onChange={(e) => setAppointmentForm((prev) => ({ ...prev, message: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAppointmentOpen(false)}>Cancel</Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleAppointmentSubmit} disabled={appointmentSubmitting}>
+              {appointmentSubmitting ? 'Submitting...' : 'Submit Request'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

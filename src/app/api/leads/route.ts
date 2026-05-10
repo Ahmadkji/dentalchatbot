@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, phone, question, preferredContact, source } = body;
+    const { name, phone, question, preferredContact, source, service, preferredDate, preferredTime, message, internalNote, status } = body;
 
     if (!name || !phone) {
       return NextResponse.json(
@@ -41,7 +41,13 @@ export async function POST(request: NextRequest) {
         name,
         phone,
         question: question || '',
+        service: service || null,
+        preferredDate: preferredDate || null,
+        preferredTime: preferredTime || null,
+        message: message || null,
+        internalNote: internalNote || null,
         preferredContact: preferredContact || 'phone',
+        status: status || 'new',
         source: source || 'chatbot',
       },
     });

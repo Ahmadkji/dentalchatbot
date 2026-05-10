@@ -25,27 +25,26 @@ import {
 } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Search, Plus, MoreHorizontal, Eye, PhoneCall, CheckCircle } from 'lucide-react'
+import { Search, Plus, MoreHorizontal, Eye } from 'lucide-react'
 import { toast } from 'sonner'
+import LeadCollectionSettings from './lead-collection-settings'
 
 interface Lead {
   id: string
   name: string
   phone: string
   question: string
+  service?: string | null
+  preferredDate?: string | null
+  preferredTime?: string | null
+  message?: string | null
+  internalNote?: string | null
   preferredContact: string
   source: string
   status: string
@@ -55,8 +54,9 @@ interface Lead {
 const statusColors: Record<string, string> = {
   new: 'bg-sky-50 text-sky-700 border-sky-200',
   contacted: 'bg-amber-50 text-amber-700 border-amber-200',
-  qualified: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  booked: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   lost: 'bg-gray-50 text-gray-600 border-gray-200',
+  spam: 'bg-red-50 text-red-700 border-red-200',
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -72,6 +72,10 @@ const emptyForm = {
   name: '',
   phone: '',
   question: '',
+  service: '',
+  preferredDate: '',
+  preferredTime: '',
+  message: '',
   preferredContact: 'phone',
   source: 'website',
 }
@@ -86,6 +90,7 @@ export default function LeadsPage() {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  const [activeTab, setActiveTab] = useState<'leads' | 'settings'>('leads')
 
   const fetchLeads = useCallback(async () => {
     setLoading(true)
@@ -105,7 +110,11 @@ export default function LeadsPage() {
   }, [statusFilter])
 
   useEffect(() => {
-    fetchLeads()
+    const timer = window.setTimeout(() => {
+      void fetchLeads()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
   }, [fetchLeads])
 
   const filteredLeads = leads.filter((l) =>
@@ -183,18 +192,25 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-4">
+      {/* Page-level tab switcher */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'leads' | 'settings')}>
+        <TabsList>
+          <TabsTrigger value="leads" className="text-xs">Leads</TabsTrigger>
+          <TabsTrigger value="settings" className="text-xs">Collection Settings</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {activeTab === 'leads' ? (
+      <>
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <Tabs value={statusFilter} onValueChange={setStatusFilter}>
           <TabsList className="h-8">
             <TabsTrigger value="all" className="text-xs px-3 h-6">All</TabsTrigger>
             <TabsTrigger value="new" className="text-xs px-3 h-6">New</TabsTrigger>
-            <TabsTrigger value="contacted" className="text-xs px-3 h-6">Contacted</TabsTrigger>
-            <TabsTrigger value="qualified" className="text-xs px-3 h-6">Qualified</TabsTrigger>
-            <TabsTrigger value="lost" className="text-xs px-3 h-6">Lost</TabsTrigger>
           </TabsList>
         </Tabs>
-        <div className="relative flex-1 max-w-sm min-w-[180px]">
+        <div className="relative w-full min-w-[180px] sm:max-w-sm sm:flex-1">
           <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
           <Input
             placeholder="Search leads..."
@@ -206,7 +222,7 @@ export default function LeadsPage() {
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <Button
             size="sm"
-            className="h-8 bg-emerald-600 hover:bg-emerald-700"
+            className="h-8 w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
             onClick={() => {
               setForm(emptyForm)
               setAddDialogOpen(true)
@@ -249,39 +265,34 @@ export default function LeadsPage() {
                   rows={3}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label>Preferred Contact</Label>
-                  <Select
-                    value={form.preferredContact}
-                    onValueChange={(v) => setForm({ ...form, preferredContact: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="phone">Phone</SelectItem>
-                      <SelectItem value="email">Email</SelectItem>
-                      <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                      <SelectItem value="sms">SMS</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="lead-service">Service</Label>
+                  <Input
+                    id="lead-service"
+                    value={form.service}
+                    onChange={(e) => setForm({ ...form, service: e.target.value })}
+                    placeholder="Dental cleaning"
+                  />
                 </div>
                 <div className="grid gap-2">
-                  <Label>Source</Label>
-                  <Select value={form.source} onValueChange={(v) => setForm({ ...form, source: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="website">Website</SelectItem>
-                      <SelectItem value="chatbot">Chatbot</SelectItem>
-                      <SelectItem value="referral">Referral</SelectItem>
-                      <SelectItem value="social">Social Media</SelectItem>
-                      <SelectItem value="walk-in">Walk-in</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="lead-date">Preferred Date</Label>
+                  <Input
+                    id="lead-date"
+                    type="date"
+                    value={form.preferredDate}
+                    onChange={(e) => setForm({ ...form, preferredDate: e.target.value })}
+                  />
                 </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="lead-message">Message</Label>
+                <Input
+                  id="lead-message"
+                  value={form.message}
+                  onChange={(e) => setForm({ ...form, message: e.target.value })}
+                  placeholder="Short note"
+                />
               </div>
             </div>
             <DialogFooter>
@@ -301,16 +312,15 @@ export default function LeadsPage() {
       </div>
 
       {/* Leads Table */}
-      <div className="rounded-md border">
+      <div className="rounded-md border bg-white">
         <div className="max-h-[600px] overflow-y-auto">
-          <Table>
+          <Table className="min-w-[540px] sm:min-w-[700px]">
             <TableHeader>
-              <TableRow>
+              <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
                 <TableHead>Name</TableHead>
                 <TableHead className="hidden md:table-cell">Phone</TableHead>
                 <TableHead className="hidden lg:table-cell">Question</TableHead>
-                <TableHead className="hidden lg:table-cell">Pref. Contact</TableHead>
-                <TableHead className="hidden md:table-cell">Source</TableHead>
+                <TableHead className="hidden xl:table-cell">Service</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="hidden md:table-cell">Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -320,7 +330,7 @@ export default function LeadsPage() {
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-20" />
                       </TableCell>
@@ -337,15 +347,8 @@ export default function LeadsPage() {
                     <TableCell className="hidden lg:table-cell text-muted-foreground max-w-[200px] truncate">
                       {lead.question || '—'}
                     </TableCell>
-                    <TableCell className="hidden lg:table-cell text-muted-foreground text-xs">
-                      {lead.preferredContact
-                        ? lead.preferredContact.charAt(0).toUpperCase() + lead.preferredContact.slice(1)
-                        : '—'}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-muted-foreground text-xs">
-                      {lead.source
-                        ? lead.source.charAt(0).toUpperCase() + lead.source.slice(1)
-                        : '—'}
+                    <TableCell className="hidden xl:table-cell text-muted-foreground text-xs">
+                      {lead.service || '—'}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={lead.status} />
@@ -375,30 +378,8 @@ export default function LeadsPage() {
                               View Details
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            {lead.status === 'new' && (
-                              <DropdownMenuItem onClick={() => updateStatus(lead.id, 'contacted')}>
-                                <PhoneCall className="size-3.5 mr-2" />
-                                Mark as Contacted
-                              </DropdownMenuItem>
-                            )}
-                            {(lead.status === 'new' || lead.status === 'contacted') && (
-                              <DropdownMenuItem onClick={() => updateStatus(lead.id, 'qualified')}>
-                                <CheckCircle className="size-3.5 mr-2" />
-                                Mark as Qualified
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => updateStatus(lead.id, 'new')}>
-                              New
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'contacted')}>
-                              Contacted
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'qualified')}>
-                              Qualified
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'lost')}>
-                              Lost
+                              Mark as New
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -408,7 +389,7 @@ export default function LeadsPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No leads found. Adjust filters or add a new lead.
                   </TableCell>
                 </TableRow>
@@ -427,7 +408,7 @@ export default function LeadsPage() {
           </DialogHeader>
           {selectedLead && (
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Name</p>
                   <p className="text-sm font-medium">{selectedLead.name}</p>
@@ -437,26 +418,17 @@ export default function LeadsPage() {
                   <p className="text-sm">{selectedLead.phone || '—'}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Preferred Contact</p>
-                  <p className="text-sm">
-                    {selectedLead.preferredContact
-                      ? selectedLead.preferredContact.charAt(0).toUpperCase() +
-                        selectedLead.preferredContact.slice(1)
-                      : '—'}
-                  </p>
+                  <p className="text-xs text-muted-foreground mb-1">Service</p>
+                  <p className="text-sm">{selectedLead.service || '—'}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Source</p>
-                  <p className="text-sm">
-                    {selectedLead.source
-                      ? selectedLead.source.charAt(0).toUpperCase() + selectedLead.source.slice(1)
-                      : '—'}
-                  </p>
+                  <p className="text-xs text-muted-foreground mb-1">Preferred Date</p>
+                  <p className="text-sm">{selectedLead.preferredDate || '—'}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Status</p>
                   <StatusBadge status={selectedLead.status} />
@@ -472,43 +444,25 @@ export default function LeadsPage() {
                   {selectedLead.question || 'No question provided'}
                 </p>
               </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Message</p>
+                <p className="text-sm whitespace-pre-wrap">
+                  {selectedLead.message || '—'}
+                </p>
+              </div>
             </div>
           )}
           <DialogFooter>
-            {selectedLead && (
-              <div className="flex gap-2 w-full sm:justify-end">
-                {selectedLead.status === 'new' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-amber-700 border-amber-200 hover:bg-amber-50"
-                    onClick={() => {
-                      updateStatus(selectedLead.id, 'contacted')
-                      setDetailDialogOpen(false)
-                    }}
-                  >
-                    <PhoneCall className="size-3.5 mr-1" />
-                    Mark Contacted
-                  </Button>
-                )}
-                {(selectedLead.status === 'new' || selectedLead.status === 'contacted') && (
-                  <Button
-                    size="sm"
-                    className="bg-emerald-600 hover:bg-emerald-700"
-                    onClick={() => {
-                      updateStatus(selectedLead.id, 'qualified')
-                      setDetailDialogOpen(false)
-                    }}
-                  >
-                    <CheckCircle className="size-3.5 mr-1" />
-                    Mark Qualified
-                  </Button>
-                )}
-              </div>
-            )}
+            <Button variant="outline" onClick={() => setDetailDialogOpen(false)}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </>
+      ) : (
+        <LeadCollectionSettings />
+      )}
     </div>
   )
 }

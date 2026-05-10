@@ -368,13 +368,70 @@ function SidebarSeparator({
   )
 }
 
-function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
+function SidebarContent({
+  className,
+  onKeyDown,
+  ...props
+}: React.ComponentProps<"div">) {
+  const contentRef = React.useRef<HTMLDivElement>(null)
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    onKeyDown?.(event)
+    if (event.defaultPrevented) {
+      return
+    }
+
+    const container = contentRef.current
+    if (!container) {
+      return
+    }
+
+    // Enable keyboard scrolling when sidebar items are focused.
+    if (event.key === "ArrowDown") {
+      container.scrollBy({ top: 56, behavior: "smooth" })
+      event.preventDefault()
+      return
+    }
+
+    if (event.key === "ArrowUp") {
+      container.scrollBy({ top: -56, behavior: "smooth" })
+      event.preventDefault()
+      return
+    }
+
+    if (event.key === "PageDown") {
+      container.scrollBy({ top: container.clientHeight * 0.9, behavior: "smooth" })
+      event.preventDefault()
+      return
+    }
+
+    if (event.key === "PageUp") {
+      container.scrollBy({ top: -(container.clientHeight * 0.9), behavior: "smooth" })
+      event.preventDefault()
+      return
+    }
+
+    if (event.key === "Home") {
+      container.scrollTo({ top: 0, behavior: "smooth" })
+      event.preventDefault()
+      return
+    }
+
+    if (event.key === "End") {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" })
+      event.preventDefault()
+    }
+  }
+
   return (
     <div
+      ref={contentRef}
       data-slot="sidebar-content"
       data-sidebar="content"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
       className={cn(
-        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto outline-none group-data-[collapsible=icon]:overflow-hidden",
         className
       )}
       {...props}
