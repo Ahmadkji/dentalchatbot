@@ -121,6 +121,31 @@
   }
 }
 
+/* Monospaced numbers for stats/counters */
+.font-mono-nums {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-geist-mono);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
 /* Mobile-first responsive utilities */
 @layer utilities {
   .safe-bottom {

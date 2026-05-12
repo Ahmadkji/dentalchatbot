@@ -16,7 +16,29 @@ const editableFields = [
   'ctaLink',
 ] as const
 
-export async function GET() {
+function resolveScriptOrigin(request: NextRequest) {
+  const forwardedProto = request.headers.get('x-forwarded-proto')
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host')
+
+  if (forwardedHost) {
+    if (forwardedProto) {
+      return `${forwardedProto}://${forwardedHost}`
+    }
+    if (forwardedHost.includes('localhost') || forwardedHost.startsWith('127.0.0.1')) {
+      return `http://${forwardedHost}`
+    }
+    return `https://${forwardedHost}`
+  }
+
+  const configuredOrigin = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
+  if (configuredOrigin) {
+    return configuredOrigin.endsWith('/') ? configuredOrigin.slice(0, -1) : configuredOrigin
+  }
+
+  return 'https://yourdomain.com'
+}
+
+export async function GET(request: NextRequest) {
   try {
     const clinic = await getDefaultClinic()
     const widgetSettings = await getDefaultWidgetSettings()
@@ -25,7 +47,8 @@ export async function GET() {
       return NextResponse.json({ error: 'Widget settings not found' }, { status: 404 })
     }
 
-    const embedCode = `<script src="https://yourdomain.com/widget.js" data-clinic-id="${clinic.id}"></script>`
+    const origin = resolveScriptOrigin(request)
+    const embedCode = `<script src="${origin}/widget.js" data-clinic-id="${clinic.id}"></script>`
 
     return NextResponse.json({
       ...widgetSettings,

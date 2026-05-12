@@ -26,6 +26,7 @@ export interface Patient {
   dob: string;
   lastVisit: string | null;
   status: string;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +44,7 @@ export interface Conversation {
   needsImprovement: boolean;
   leadCaptured: boolean;
   appointmentRequested: boolean;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -65,6 +67,7 @@ export interface Appointment {
   type: string;
   status: string;
   notes: string | null;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -83,17 +86,6 @@ export interface Service {
   updatedAt: Date;
 }
 
-export interface Doctor {
-  id: string;
-  name: string;
-  specialization: string;
-  phone: string;
-  availableDays: string;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 export interface Lead {
   id: string;
   name: string;
@@ -107,6 +99,7 @@ export interface Lead {
   preferredContact: string;
   status: string;
   source: string;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -121,6 +114,7 @@ export interface AppointmentRequest {
   preferredDoctor: string | null;
   status: string;
   source: string;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -151,6 +145,7 @@ export interface InteractionEvent {
   source: 'playground' | 'widget';
   service: string | null;
   metadata: string | null;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -162,6 +157,7 @@ export interface UnansweredQuestion {
   sourcePage: string | null;
   status: 'open' | 'answered' | 'ignored';
   answer: string | null;
+  userId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -309,7 +305,6 @@ const conversations = createTable<Conversation>();
 const messages = createTable<Message>();
 const appointments = createTable<Appointment>();
 const services = createTable<Service>();
-const doctors = createTable<Doctor>();
 const leads = createTable<Lead>();
 const appointmentRequests = createTable<AppointmentRequest>();
 const faqs = createTable<FAQ>();
@@ -320,19 +315,20 @@ const leadCustomFields = createTable<LeadCustomField>();
 
 // --------------- Seed Data ---------------
 function seed() {
+  const DEMO_USER = 'demo-user';
   // 12 Patients
-  const p1 = patients.create({ data: { name: 'Sarah Mitchell', email: 'sarah.mitchell@email.com', phone: '(555) 234-5678', dob: '1988-03-15', lastVisit: '2025-01-10', status: 'active' } });
-  const p2 = patients.create({ data: { name: 'James Rodriguez', email: 'james.rodriguez@email.com', phone: '(555) 345-6789', dob: '1975-07-22', lastVisit: '2024-11-05', status: 'active' } });
-  const p3 = patients.create({ data: { name: 'Emily Chen', email: 'emily.chen@email.com', phone: '(555) 456-7890', dob: '1992-11-08', lastVisit: '2025-02-18', status: 'active' } });
-  const p4 = patients.create({ data: { name: 'Michael Thompson', email: 'michael.thompson@email.com', phone: '(555) 567-8901', dob: '1965-05-30', lastVisit: '2024-09-12', status: 'inactive' } });
-  const p5 = patients.create({ data: { name: 'Olivia Parker', email: 'olivia.parker@email.com', phone: '(555) 678-9012', dob: '1998-01-25', lastVisit: null, status: 'new' } });
-  const p6 = patients.create({ data: { name: 'David Kim', email: 'david.kim@email.com', phone: '(555) 789-0123', dob: '1983-09-14', lastVisit: '2025-01-28', status: 'active' } });
-  const p7 = patients.create({ data: { name: 'Rachel Green', email: 'rachel.green@email.com', phone: '(555) 890-1234', dob: '1990-12-03', lastVisit: '2024-08-20', status: 'inactive' } });
-  const p8 = patients.create({ data: { name: 'Marcus Johnson', email: 'marcus.johnson@email.com', phone: '(555) 901-2345', dob: '1972-04-18', lastVisit: '2025-02-05', status: 'active' } });
-  const p9 = patients.create({ data: { name: 'Sophia Williams', email: 'sophia.williams@email.com', phone: '(555) 012-3456', dob: '1995-06-27', lastVisit: null, status: 'new' } });
-  const p10 = patients.create({ data: { name: 'Robert Davis', email: 'robert.davis@email.com', phone: '(555) 123-4567', dob: '1958-10-09', lastVisit: '2024-12-15', status: 'active' } });
-  const p11 = patients.create({ data: { name: 'Isabella Martinez', email: 'isabella.martinez@email.com', phone: '(555) 234-9876', dob: '2001-02-14', lastVisit: null, status: 'new' } });
-  const p12 = patients.create({ data: { name: 'Thomas Anderson', email: 'thomas.anderson@email.com', phone: '(555) 345-8765', dob: '1980-08-21', lastVisit: '2024-07-30', status: 'inactive' } });
+  const p1 = patients.create({ data: { name: 'Sarah Mitchell', email: 'sarah.mitchell@email.com', phone: '(555) 234-5678', dob: '1988-03-15', lastVisit: '2025-01-10', status: 'active', userId: DEMO_USER } });
+  const p2 = patients.create({ data: { name: 'James Rodriguez', email: 'james.rodriguez@email.com', phone: '(555) 345-6789', dob: '1975-07-22', lastVisit: '2024-11-05', status: 'active', userId: DEMO_USER } });
+  const p3 = patients.create({ data: { name: 'Emily Chen', email: 'emily.chen@email.com', phone: '(555) 456-7890', dob: '1992-11-08', lastVisit: '2025-02-18', status: 'active', userId: DEMO_USER } });
+  const p4 = patients.create({ data: { name: 'Michael Thompson', email: 'michael.thompson@email.com', phone: '(555) 567-8901', dob: '1965-05-30', lastVisit: '2024-09-12', status: 'inactive', userId: DEMO_USER } });
+  const p5 = patients.create({ data: { name: 'Olivia Parker', email: 'olivia.parker@email.com', phone: '(555) 678-9012', dob: '1998-01-25', lastVisit: null, status: 'new', userId: DEMO_USER } });
+  const p6 = patients.create({ data: { name: 'David Kim', email: 'david.kim@email.com', phone: '(555) 789-0123', dob: '1983-09-14', lastVisit: '2025-01-28', status: 'active', userId: DEMO_USER } });
+  const p7 = patients.create({ data: { name: 'Rachel Green', email: 'rachel.green@email.com', phone: '(555) 890-1234', dob: '1990-12-03', lastVisit: '2024-08-20', status: 'inactive', userId: DEMO_USER } });
+  const p8 = patients.create({ data: { name: 'Marcus Johnson', email: 'marcus.johnson@email.com', phone: '(555) 901-2345', dob: '1972-04-18', lastVisit: '2025-02-05', status: 'active', userId: DEMO_USER } });
+  const p9 = patients.create({ data: { name: 'Sophia Williams', email: 'sophia.williams@email.com', phone: '(555) 012-3456', dob: '1995-06-27', lastVisit: null, status: 'new', userId: DEMO_USER } });
+  const p10 = patients.create({ data: { name: 'Robert Davis', email: 'robert.davis@email.com', phone: '(555) 123-4567', dob: '1958-10-09', lastVisit: '2024-12-15', status: 'active', userId: DEMO_USER } });
+  const p11 = patients.create({ data: { name: 'Isabella Martinez', email: 'isabella.martinez@email.com', phone: '(555) 234-9876', dob: '2001-02-14', lastVisit: null, status: 'new', userId: DEMO_USER } });
+  const p12 = patients.create({ data: { name: 'Thomas Anderson', email: 'thomas.anderson@email.com', phone: '(555) 345-8765', dob: '1980-08-21', lastVisit: '2024-07-30', status: 'inactive', userId: DEMO_USER } });
 
   // 8 Services
   services.create({ data: { name: 'Dental Cleaning', description: 'Professional teeth cleaning including scaling and polishing to remove plaque and tartar buildup.', duration: '45 min', requiresAppointment: true, preparationInstructions: 'No special preparation needed. Avoid eating heavy meals before the appointment.', price: '$80', department: 'dental', isActive: true } });
@@ -344,25 +340,19 @@ function seed() {
   services.create({ data: { name: 'Skin Treatment', description: 'Cosmetic skin treatments including facial rejuvenation, acne scar treatment, and skin wellness consultations.', duration: '45 min', requiresAppointment: true, preparationInstructions: 'Avoid sun exposure and retinol products for 48 hours before treatment. Come with a clean face.', price: '$150-$300', department: 'cosmetic', isActive: true } });
   services.create({ data: { name: 'Physiotherapy', description: 'Rehabilitation and pain management for jaw disorders (TMJ), post-surgical recovery, and musculoskeletal issues.', duration: '45 min', requiresAppointment: true, preparationInstructions: 'Wear comfortable clothing. Bring any referral letters or imaging results.', price: '$100-$200', department: 'physiotherapy', isActive: true } });
 
-  // 4 Doctors
-  doctors.create({ data: { name: 'Sarah Ahmed', specialization: 'General Dentistry', phone: '(555) 100-3001', availableDays: 'Mon-Sat', isActive: true } });
-  doctors.create({ data: { name: 'Michael Torres', specialization: 'Endodontics (Root Canal Specialist)', phone: '(555) 100-3002', availableDays: 'Mon-Fri', isActive: true } });
-  doctors.create({ data: { name: 'Lisa Park', specialization: 'Orthodontics', phone: '(555) 100-3003', availableDays: 'Tue-Sat', isActive: true } });
-  doctors.create({ data: { name: 'James Wilson', specialization: 'Cosmetic Dentistry', phone: '(555) 100-3004', availableDays: 'Mon-Thu', isActive: true } });
-
   // 5 Leads
-  leads.create({ data: { name: 'Amanda Foster', phone: '(555) 411-5001', question: 'I have a chipped front tooth. Can you fix it and how much would it cost?', service: 'Cosmetic repair consultation', preferredDate: daysFromNow(2), preferredTime: '10:00', message: 'Would prefer morning if possible.', internalNote: null, preferredContact: 'phone', status: 'new', source: 'chatbot' } });
-  leads.create({ data: { name: 'Kevin Brooks', phone: '(555) 411-5002', question: 'Do you offer payment plans for dental implants? I need two implants.', service: 'Dental implants', preferredDate: daysFromNow(3), preferredTime: '14:00', message: 'Needs financing details.', internalNote: 'Potential high-value treatment.', preferredContact: 'whatsapp', status: 'contacted', source: 'chatbot' } });
-  leads.create({ data: { name: 'Priya Sharma', phone: '(555) 411-5003', question: 'My son needs braces. What is the minimum age for orthodontic treatment?', service: 'Orthodontic consultation', preferredDate: daysFromNow(5), preferredTime: '18:00', message: 'Asking for child consultation.', internalNote: null, preferredContact: 'phone', status: 'booked', source: 'web' } });
-  leads.create({ data: { name: 'Carlos Mendez', phone: '(555) 411-5004', question: 'I am looking for a dentist who accepts my insurance plan. Do you take Delta Dental?', service: 'Insurance verification', preferredDate: null, preferredTime: null, message: 'Wants confirmation before booking.', internalNote: null, preferredContact: 'phone', status: 'new', source: 'chatbot' } });
-  leads.create({ data: { name: 'Linda Nguyen', phone: '(555) 411-5005', question: 'I had a tooth extracted last month at another clinic and want a second opinion on the healing.', service: 'Second opinion consultation', preferredDate: daysFromNow(1), preferredTime: '16:00', message: 'Patient wants callback first.', internalNote: null, preferredContact: 'whatsapp', status: 'contacted', source: 'chatbot' } });
+  leads.create({ data: { name: 'Amanda Foster', phone: '(555) 411-5001', question: 'I have a chipped front tooth. Can you fix it and how much would it cost?', service: 'Cosmetic repair consultation', preferredDate: daysFromNow(2), preferredTime: '10:00', message: 'Would prefer morning if possible.', internalNote: null, preferredContact: 'phone', status: 'new', source: 'chatbot', userId: DEMO_USER } });
+  leads.create({ data: { name: 'Kevin Brooks', phone: '(555) 411-5002', question: 'Do you offer payment plans for dental implants? I need two implants.', service: 'Dental implants', preferredDate: daysFromNow(3), preferredTime: '14:00', message: 'Needs financing details.', internalNote: 'Potential high-value treatment.', preferredContact: 'whatsapp', status: 'contacted', source: 'chatbot', userId: DEMO_USER } });
+  leads.create({ data: { name: 'Priya Sharma', phone: '(555) 411-5003', question: 'My son needs braces. What is the minimum age for orthodontic treatment?', service: 'Orthodontic consultation', preferredDate: daysFromNow(5), preferredTime: '18:00', message: 'Asking for child consultation.', internalNote: null, preferredContact: 'phone', status: 'booked', source: 'web', userId: DEMO_USER } });
+  leads.create({ data: { name: 'Carlos Mendez', phone: '(555) 411-5004', question: 'I am looking for a dentist who accepts my insurance plan. Do you take Delta Dental?', service: 'Insurance verification', preferredDate: null, preferredTime: null, message: 'Wants confirmation before booking.', internalNote: null, preferredContact: 'phone', status: 'new', source: 'chatbot', userId: DEMO_USER } });
+  leads.create({ data: { name: 'Linda Nguyen', phone: '(555) 411-5005', question: 'I had a tooth extracted last month at another clinic and want a second opinion on the healing.', service: 'Second opinion consultation', preferredDate: daysFromNow(1), preferredTime: '16:00', message: 'Patient wants callback first.', internalNote: null, preferredContact: 'whatsapp', status: 'contacted', source: 'chatbot', userId: DEMO_USER } });
 
   // 5 Appointment Requests
-  appointmentRequests.create({ data: { name: 'Amanda Foster', phone: '(555) 411-5001', preferredDate: daysFromNow(2), preferredTime: '10:00', reason: 'Chipped front tooth - cosmetic repair consultation', preferredDoctor: 'Dr. James Wilson', status: 'pending', source: 'chatbot' } });
-  appointmentRequests.create({ data: { name: 'Kevin Brooks', phone: '(555) 411-5002', preferredDate: daysFromNow(3), preferredTime: '14:00', reason: 'Dental implant consultation - needs two implants', preferredDoctor: null, status: 'pending', source: 'chatbot' } });
-  appointmentRequests.create({ data: { name: 'Priya Sharma', phone: '(555) 411-5003', preferredDate: daysFromNow(5), preferredTime: '11:30', reason: 'Orthodontic consultation for son', preferredDoctor: 'Dr. Lisa Park', status: 'confirmed', source: 'web' } });
-  appointmentRequests.create({ data: { name: 'Tom Richards', phone: '(555) 411-5006', preferredDate: daysFromNow(1), preferredTime: '09:00', reason: 'Regular dental cleaning', preferredDoctor: 'Dr. Sarah Ahmed', status: 'confirmed', source: 'chatbot' } });
-  appointmentRequests.create({ data: { name: 'Helen Park', phone: '(555) 411-5007', preferredDate: daysFromNow(-2), preferredTime: '15:00', reason: 'Toothache - emergency consultation', preferredDoctor: null, status: 'cancelled', source: 'chatbot' } });
+  appointmentRequests.create({ data: { name: 'Amanda Foster', phone: '(555) 411-5001', preferredDate: daysFromNow(2), preferredTime: '10:00', reason: 'Chipped front tooth - cosmetic repair consultation', preferredDoctor: 'Dr. James Wilson', status: 'pending', source: 'chatbot', userId: DEMO_USER } });
+  appointmentRequests.create({ data: { name: 'Kevin Brooks', phone: '(555) 411-5002', preferredDate: daysFromNow(3), preferredTime: '14:00', reason: 'Dental implant consultation - needs two implants', preferredDoctor: null, status: 'pending', source: 'chatbot', userId: DEMO_USER } });
+  appointmentRequests.create({ data: { name: 'Priya Sharma', phone: '(555) 411-5003', preferredDate: daysFromNow(5), preferredTime: '11:30', reason: 'Orthodontic consultation for son', preferredDoctor: 'Dr. Lisa Park', status: 'confirmed', source: 'web', userId: DEMO_USER } });
+  appointmentRequests.create({ data: { name: 'Tom Richards', phone: '(555) 411-5006', preferredDate: daysFromNow(1), preferredTime: '09:00', reason: 'Regular dental cleaning', preferredDoctor: 'Dr. Sarah Ahmed', status: 'confirmed', source: 'chatbot', userId: DEMO_USER } });
+  appointmentRequests.create({ data: { name: 'Helen Park', phone: '(555) 411-5007', preferredDate: daysFromNow(-2), preferredTime: '15:00', reason: 'Toothache - emergency consultation', preferredDoctor: null, status: 'cancelled', source: 'chatbot', userId: DEMO_USER } });
 
   // 8 FAQs
   faqs.create({ data: { question: 'Are you open today?', answer: 'We are open Monday to Friday from 8am to 6pm, and Saturday from 9am to 2pm. We are closed on Sundays. For emergencies, call our emergency line at (555) 100-2001.', order: 1, isActive: true } });
@@ -411,6 +401,7 @@ function seed() {
         needsImprovement: c.needsImprovement || false,
         leadCaptured: c.leadCaptured || false,
         appointmentRequested: c.appointmentRequested || false,
+        userId: DEMO_USER,
       },
     }));
   }
@@ -480,22 +471,22 @@ function seed() {
   }
 
   // 16 Appointments
-  appointments.create({ data: { patientId: p1.id, date: todayISO(), time: '09:00', duration: 30, type: 'checkup', status: 'scheduled', notes: 'Follow-up on tooth pain complaint' } });
-  appointments.create({ data: { patientId: p2.id, date: todayISO(), time: '10:30', duration: 60, type: 'root-canal', status: 'scheduled', notes: 'Root canal treatment - lower molar' } });
-  appointments.create({ data: { patientId: p3.id, date: todayISO(), time: '14:00', duration: 30, type: 'consultation', status: 'scheduled', notes: 'Whitening consultation' } });
-  appointments.create({ data: { patientId: p6.id, date: todayISO(), time: '15:30', duration: 45, type: 'extraction', status: 'scheduled', notes: 'Cavity filling - upper premolar' } });
-  appointments.create({ data: { patientId: p8.id, date: todayISO(), time: '16:30', duration: 30, type: 'checkup', status: 'completed', notes: 'Crown assessment completed' } });
-  appointments.create({ data: { patientId: p10.id, date: todayISO(), time: '11:00', duration: 60, type: 'consultation', status: 'completed', notes: 'Implant consultation - good candidate' } });
-  appointments.create({ data: { patientId: p5.id, date: daysFromNow(1), time: '09:30', duration: 30, type: 'checkup', status: 'scheduled', notes: 'New patient initial exam' } });
-  appointments.create({ data: { patientId: p9.id, date: daysFromNow(1), time: '11:00', duration: 30, type: 'checkup', status: 'scheduled', notes: 'New patient registration and exam' } });
-  appointments.create({ data: { patientId: p11.id, date: daysFromNow(1), time: '13:00', duration: 60, type: 'extraction', status: 'scheduled', notes: 'Wisdom tooth evaluation' } });
-  appointments.create({ data: { patientId: p4.id, date: daysFromNow(2), time: '10:00', duration: 45, type: 'cleaning', status: 'scheduled', notes: 'Dental cleaning' } });
-  appointments.create({ data: { patientId: p7.id, date: daysFromNow(2), time: '14:30', duration: 30, type: 'consultation', status: 'scheduled', notes: 'Night guard fitting' } });
-  appointments.create({ data: { patientId: p1.id, date: daysFromNow(-7), time: '09:00', duration: 30, type: 'cleaning', status: 'completed', notes: 'Routine cleaning completed' } });
-  appointments.create({ data: { patientId: p2.id, date: daysFromNow(-5), time: '10:00', duration: 30, type: 'cleaning', status: 'completed', notes: 'Regular cleaning done' } });
-  appointments.create({ data: { patientId: p6.id, date: daysFromNow(-3), time: '14:00', duration: 45, type: 'whitening', status: 'completed', notes: 'Zoom whitening - 6 shades lighter' } });
-  appointments.create({ data: { patientId: p12.id, date: daysFromNow(-2), time: '09:30', duration: 60, type: 'root-canal', status: 'cancelled', notes: 'Patient cancelled due to feeling better' } });
-  appointments.create({ data: { patientId: p10.id, date: daysFromNow(-10), time: '11:00', duration: 45, type: 'extraction', status: 'completed', notes: 'Tooth extraction - healed well' } });
+  appointments.create({ data: { patientId: p1.id, date: todayISO(), time: '09:00', duration: 30, type: 'checkup', status: 'scheduled', notes: 'Follow-up on tooth pain complaint', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p2.id, date: todayISO(), time: '10:30', duration: 60, type: 'root-canal', status: 'scheduled', notes: 'Root canal treatment - lower molar', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p3.id, date: todayISO(), time: '14:00', duration: 30, type: 'consultation', status: 'scheduled', notes: 'Whitening consultation', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p6.id, date: todayISO(), time: '15:30', duration: 45, type: 'extraction', status: 'scheduled', notes: 'Cavity filling - upper premolar', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p8.id, date: todayISO(), time: '16:30', duration: 30, type: 'checkup', status: 'completed', notes: 'Crown assessment completed', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p10.id, date: todayISO(), time: '11:00', duration: 60, type: 'consultation', status: 'completed', notes: 'Implant consultation - good candidate', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p5.id, date: daysFromNow(1), time: '09:30', duration: 30, type: 'checkup', status: 'scheduled', notes: 'New patient initial exam', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p9.id, date: daysFromNow(1), time: '11:00', duration: 30, type: 'checkup', status: 'scheduled', notes: 'New patient registration and exam', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p11.id, date: daysFromNow(1), time: '13:00', duration: 60, type: 'extraction', status: 'scheduled', notes: 'Wisdom tooth evaluation', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p4.id, date: daysFromNow(2), time: '10:00', duration: 45, type: 'cleaning', status: 'scheduled', notes: 'Dental cleaning', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p7.id, date: daysFromNow(2), time: '14:30', duration: 30, type: 'consultation', status: 'scheduled', notes: 'Night guard fitting', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p1.id, date: daysFromNow(-7), time: '09:00', duration: 30, type: 'cleaning', status: 'completed', notes: 'Routine cleaning completed', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p2.id, date: daysFromNow(-5), time: '10:00', duration: 30, type: 'cleaning', status: 'completed', notes: 'Regular cleaning done', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p6.id, date: daysFromNow(-3), time: '14:00', duration: 45, type: 'whitening', status: 'completed', notes: 'Zoom whitening - 6 shades lighter', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p12.id, date: daysFromNow(-2), time: '09:30', duration: 60, type: 'root-canal', status: 'cancelled', notes: 'Patient cancelled due to feeling better', userId: DEMO_USER } });
+  appointments.create({ data: { patientId: p10.id, date: daysFromNow(-10), time: '11:00', duration: 45, type: 'extraction', status: 'completed', notes: 'Tooth extraction - healed well', userId: DEMO_USER } });
 
   // 18 Bot Settings
   botSettings.create({ data: { key: 'clinic_name', value: 'BrightSmile Dental Clinic', category: 'general', description: 'The display name of the dental clinic' } });
@@ -529,11 +520,11 @@ function seed() {
   botSettings.create({ data: { key: 'lead_notification_emails', value: 'pintexlab@gmail.com', category: 'lead-collection', description: 'Comma-separated email recipients for lead notifications' } });
   botSettings.create({ data: { key: 'lead_auto_escalation', value: 'false', category: 'lead-collection', description: 'Auto-escalate to human agent when lead is captured' } });
 
-  interactionEvents.create({ data: { conversationId: convs[0].id, eventType: 'whatsapp_click', source: 'playground', service: null, metadata: null } });
-  interactionEvents.create({ data: { conversationId: convs[2].id, eventType: 'appointment_request', source: 'playground', service: 'Root Canal Treatment', metadata: null } });
-  interactionEvents.create({ data: { conversationId: convs[4].id, eventType: 'location_click', source: 'widget', service: null, metadata: null } });
-  interactionEvents.create({ data: { conversationId: convs[4].id, eventType: 'directions_click', source: 'widget', service: null, metadata: null } });
-  interactionEvents.create({ data: { conversationId: convs[8].id, eventType: 'call_click', source: 'playground', service: null, metadata: null } });
+  interactionEvents.create({ data: { conversationId: convs[0].id, eventType: 'whatsapp_click', source: 'playground', service: null, metadata: null, userId: DEMO_USER } });
+  interactionEvents.create({ data: { conversationId: convs[2].id, eventType: 'appointment_request', source: 'playground', service: 'Root Canal Treatment', metadata: null, userId: DEMO_USER } });
+  interactionEvents.create({ data: { conversationId: convs[4].id, eventType: 'location_click', source: 'widget', service: null, metadata: null, userId: DEMO_USER } });
+  interactionEvents.create({ data: { conversationId: convs[4].id, eventType: 'directions_click', source: 'widget', service: null, metadata: null, userId: DEMO_USER } });
+  interactionEvents.create({ data: { conversationId: convs[8].id, eventType: 'call_click', source: 'playground', service: null, metadata: null, userId: DEMO_USER } });
 
   unansweredQuestions.create({
     data: {
@@ -542,6 +533,7 @@ function seed() {
       sourcePage: '/pricing',
       status: 'open',
       answer: null,
+      userId: DEMO_USER,
     },
   });
   unansweredQuestions.create({
@@ -551,6 +543,7 @@ function seed() {
       sourcePage: '/services/scaling',
       status: 'open',
       answer: null,
+      userId: DEMO_USER,
     },
   });
 }
@@ -603,15 +596,6 @@ export const db = {
     update: (opts: Parameters<Table<Service>['update']>[0]) => Promise.resolve(services.update(opts)),
     delete: (opts: Parameters<Table<Service>['delete']>[0]) => Promise.resolve(services.delete(opts)),
     count: (opts?: Parameters<Table<Service>['count']>[0]) => Promise.resolve(services.count(opts)),
-  },
-  doctor: {
-    findMany: (opts?: Parameters<Table<Doctor>['findMany']>[0]) => Promise.resolve(doctors.findMany(opts)),
-    findUnique: (opts: Parameters<Table<Doctor>['findUnique']>[0]) => Promise.resolve(doctors.findUnique(opts)),
-    findFirst: (opts?: Parameters<Table<Doctor>['findFirst']>[0]) => Promise.resolve(doctors.findFirst(opts)),
-    create: (opts: Parameters<Table<Doctor>['create']>[0]) => Promise.resolve(doctors.create(opts)),
-    update: (opts: Parameters<Table<Doctor>['update']>[0]) => Promise.resolve(doctors.update(opts)),
-    delete: (opts: Parameters<Table<Doctor>['delete']>[0]) => Promise.resolve(doctors.delete(opts)),
-    count: (opts?: Parameters<Table<Doctor>['count']>[0]) => Promise.resolve(doctors.count(opts)),
   },
   lead: {
     findMany: (opts?: Parameters<Table<Lead>['findMany']>[0]) => Promise.resolve(leads.findMany(opts)),

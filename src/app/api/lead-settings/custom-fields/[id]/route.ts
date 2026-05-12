@@ -1,10 +1,13 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const { id } = await params;
     const body = await request.json();
@@ -36,6 +39,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const { id } = await params;
     await db.leadCustomField.delete({ where: { id } });

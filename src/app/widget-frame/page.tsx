@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import WidgetFramePage from '@/components/widget-frame-page'
 
 export default async function Page({
@@ -6,5 +7,9 @@ export default async function Page({
   searchParams: Promise<{ clinicId?: string }>
 }) {
   const params = await searchParams
-  return <WidgetFramePage clinicId={params.clinicId || null} />
+  return (
+    <Suspense>
+      <WidgetFramePage clinicId={params.clinicId || null} />
+    </Suspense>
+  )
 }

@@ -1,7 +1,10 @@
 import { createKnowledgeSource, clinicData, getDefaultClinic } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 export async function GET(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const clinic = await getDefaultClinic()
     if (!clinic) {
@@ -29,6 +32,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const clinic = await getDefaultClinic()
     if (!clinic) {

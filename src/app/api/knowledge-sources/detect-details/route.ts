@@ -1,5 +1,6 @@
 import { clinicData } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 interface DetectedDetail {
   field: string
@@ -94,13 +95,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'pricing', label: 'Pricing', value: pricing.trim().substring(0, 120), confidence: 'medium' })
   }
 
-  // Doctor detection
-  const doctorMatches = content.match(/dr\.?\s+[a-z]+(?:\s+[a-z]+)*/gi)
-  if (doctorMatches && doctorMatches.length > 0) {
-    const uniqueDoctors = [...new Set(doctorMatches.map((d) => d.trim()))]
-    details.push({ field: 'doctors', label: 'Doctors', value: uniqueDoctors.join(', '), confidence: 'medium' })
-  }
-
   // Emergency detection
   if (lower.includes('emergency')) {
     const emergencyPatterns = [
@@ -118,6 +112,8 @@ function detectClinicDetails(content: string): DetectedDetail[] {
 }
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const body = await request.json()
     const { sourceId } = body

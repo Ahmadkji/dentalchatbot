@@ -114,7 +114,6 @@ const detailIcons: Record<string, React.ComponentType<{ className?: string }>> =
   opening_hours: ClockIcon,
   services: Stethoscope,
   pricing: CreditCard,
-  doctors: Stethoscope,
   emergency: AlertCircle,
 }
 

@@ -1,10 +1,14 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth, requireOwnership } from '@/lib/auth-helpers';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const { id } = await params;
 
@@ -12,12 +16,8 @@ export async function GET(
       where: { id },
     });
 
-    if (!conversation) {
-      return NextResponse.json(
-        { error: 'Conversation not found' },
-        { status: 404 }
-      );
-    }
+    const ownershipError = requireOwnership(conversation, user.id);
+    if (ownershipError) return ownershipError;
 
     const convMessages = await db.message.findMany({
       where: { conversationId: id },
@@ -73,6 +73,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const { id } = await params;
     const body = await request.json();
@@ -96,12 +99,8 @@ export async function PATCH(
       where: { id },
     });
 
-    if (!existing) {
-      return NextResponse.json(
-        { error: 'Conversation not found' },
-        { status: 404 }
-      );
-    }
+    const ownershipError = requireOwnership(existing, user.id);
+    if (ownershipError) return ownershipError;
 
     const conversation = await db.conversation.update({
       where: { id },

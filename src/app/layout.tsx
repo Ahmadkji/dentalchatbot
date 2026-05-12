@@ -14,11 +14,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DentBot - Dental Clinic AI Assistant",
-  description: "AI-powered dental clinic management dashboard with intelligent chatbot assistant.",
-  keywords: ["dental", "clinic", "AI", "chatbot", "dashboard", "DentBot"],
-  authors: [{ name: "DentBot" }],
-  viewport: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
+  title: "DentalGPT Studio — AI Front Desk for Dental Clinics",
+  description: "Your AI front desk answers patient questions 24/7, books appointments automatically, and captures every lead. Never miss a patient call again.",
+  keywords: ["dental", "clinic", "AI", "front desk", "chatbot", "appointment booking", "patient communication"],
+  authors: [{ name: "DentalGPT Studio" }],
 };
 
 export default function RootLayout({

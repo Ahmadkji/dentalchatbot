@@ -1,5 +1,6 @@
 import { clinicData, getDefaultClinic } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 const editableFields = [
   'name',
@@ -18,6 +19,8 @@ const editableFields = [
 ] as const
 
 export async function GET() {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const clinic = await getDefaultClinic()
 
@@ -33,6 +36,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const clinic = await getDefaultClinic()
     if (!clinic) {

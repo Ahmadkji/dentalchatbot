@@ -1,7 +1,10 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 export async function GET() {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const allSettings = await db.botSetting.findMany({
       where: { category: 'lead-collection' },
@@ -25,6 +28,8 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const { settings } = await request.json();
 

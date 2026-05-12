@@ -1,10 +1,13 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const { id } = await params
     const existing = await db.unansweredQuestion.findUnique({ where: { id } })

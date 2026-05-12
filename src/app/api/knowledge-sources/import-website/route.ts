@@ -1,8 +1,11 @@
 import { createKnowledgeSource, clinicData, getDefaultClinic, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
 import { importWebsiteContent } from '@/lib/knowledge-import'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const clinic = await getDefaultClinic()
     if (!clinic) {

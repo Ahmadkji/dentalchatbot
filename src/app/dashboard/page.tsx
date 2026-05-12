@@ -132,12 +132,8 @@ export default function Home() {
     const controller = new AbortController()
     let isActive = true
 
-    const hasSession = localStorage.getItem('dentbot-auth') === 'true'
-    if (!hasSession) {
-      router.replace('/auth')
-      return
-    }
-
+    // Auth is now handled by middleware + Supabase session
+    // No need for client-side localStorage checks
     async function loadClinic() {
       try {
         const res = await fetch('/api/clinic', { signal: controller.signal })
@@ -162,9 +158,10 @@ export default function Home() {
     }
   }, [router])
 
-  const handleSignOut = () => {
-    localStorage.removeItem('dentbot-auth')
-    router.replace('/auth')
+  const handleSignOut = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.replace('/login')
+    router.refresh()
   }
 
   const clinicInitials = clinic?.name

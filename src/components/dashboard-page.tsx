@@ -118,6 +118,18 @@ function RowStatus({ value }: { value: string }) {
   )
 }
 
+const cardNavTargets: Record<string, string> = {
+  'Total Conversations': 'conversations',
+  'Lead Capture Rate': 'leads',
+  'Resolution Rate': 'conversations',
+  'Helpful Score': 'conversations',
+  'Knowledge Sources': 'knowledge-base',
+  'Indexed Chunks': 'knowledge-base',
+  'WhatsApp Clicks (Today)': 'customizations',
+  'After-Hours Leads': 'leads',
+  'Unanswered Questions': 'unanswered-questions',
+}
+
 export default function DashboardPage() {
   const { setActivePage } = useAppStore()
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -276,7 +288,11 @@ export default function DashboardPage() {
                   </TableRow>
                 ))
               : cards.map((card) => (
-                  <TableRow key={card.label} className="group">
+                  <TableRow
+                    key={card.label}
+                    className="group cursor-pointer hover:bg-emerald-50/40 transition-colors"
+                    onClick={() => setActivePage((cardNavTargets[card.label] as any) || 'dashboard')}
+                  >
                     <TableCell>
                       <div className="flex size-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-100 transition-colors">
                         <card.icon className="size-4" />
@@ -337,7 +353,7 @@ export default function DashboardPage() {
                   const pct = Math.round((row.count / maxCount) * 100)
                   const medalColor = idx === 0 ? 'text-amber-500' : idx === 1 ? 'text-slate-400' : idx === 2 ? 'text-orange-400' : 'text-slate-300'
                   return (
-                    <TableRow key={row.service} className="group cursor-default">
+                    <TableRow key={row.service} className="group cursor-pointer hover:bg-emerald-50/40 transition-colors" onClick={() => setActivePage('conversations')}>
                       <TableCell className="text-center">
                         <span className={`text-xs font-bold ${medalColor}`}>{idx + 1}</span>
                       </TableCell>
@@ -401,7 +417,11 @@ export default function DashboardPage() {
                 ))
               ) : conversations.length > 0 ? (
                 conversations.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow
+                    key={row.id}
+                    className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
+                    onClick={() => setActivePage('conversations')}
+                  >
                     <TableCell className="max-w-[180px] font-medium whitespace-normal break-words">
                       <div>{row.visitorName}</div>
                       <div className="mt-0.5 text-[11px] text-muted-foreground md:hidden">{row.sourcePage || 'Direct'}</div>
@@ -454,7 +474,11 @@ export default function DashboardPage() {
                 ))
               ) : unansweredPreview.length > 0 ? (
                 unansweredPreview.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow
+                    key={row.id}
+                    className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
+                    onClick={() => setActivePage('unanswered-questions')}
+                  >
                     <TableCell className="max-w-[220px] font-medium whitespace-normal break-words">{row.question}</TableCell>
                     <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{row.sourcePage || '—'}</TableCell>
                     <TableCell><RowStatus value={row.status} /></TableCell>
@@ -499,7 +523,11 @@ export default function DashboardPage() {
                   ))
                 ) : leads.length > 0 ? (
                   leads.map((lead) => (
-                    <TableRow key={lead.id}>
+                    <TableRow
+                      key={lead.id}
+                      className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
+                      onClick={() => setActivePage('leads')}
+                    >
                       <TableCell className="max-w-[170px] font-medium whitespace-normal break-words">{lead.name}</TableCell>
                       <TableCell><RowStatus value={lead.status} /></TableCell>
                       <TableCell className="hidden sm:table-cell capitalize">{lead.preferredContact}</TableCell>
@@ -546,7 +574,11 @@ export default function DashboardPage() {
                   ))
                 ) : sources.length > 0 ? (
                   sources.map((source) => (
-                    <TableRow key={source.id}>
+                    <TableRow
+                      key={source.id}
+                      className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
+                      onClick={() => setActivePage('knowledge-base')}
+                    >
                       <TableCell className="max-w-[180px] font-medium whitespace-normal break-words">{source.title}</TableCell>
                       <TableCell className="hidden sm:table-cell uppercase text-xs text-muted-foreground">{source.type.replace('_', ' ')}</TableCell>
                       <TableCell><RowStatus value={source.status} /></TableCell>

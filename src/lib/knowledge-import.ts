@@ -22,7 +22,6 @@ function buildDentalStructuredNotes(text: string) {
     { title: 'Services', patterns: ['services', 'treatment', 'root canal', 'braces', 'teeth whitening', 'dental implants'] },
     { title: 'Timings', patterns: ['hours', 'timings', 'open', 'monday', 'saturday'] },
     { title: 'Location', patterns: ['address', 'location', 'near', 'landmark', 'city'] },
-    { title: 'Doctor Names', patterns: ['dr.', 'doctor', 'dentist', 'specialist'] },
     { title: 'Contact Number', patterns: ['phone', 'call', 'whatsapp', 'contact'] },
     { title: 'Pricing Text', patterns: ['price', 'pricing', 'fee', 'cost', 'consultation'] },
     { title: 'Appointment Instructions', patterns: ['appointment', 'book', 'schedule', 'walk-in'] },

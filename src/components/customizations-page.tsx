@@ -47,7 +47,10 @@ export default function CustomizationsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const settingsRef = useRef(settings)
-  settingsRef.current = settings
+
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
 
   useEffect(() => {
     async function load() {
@@ -58,7 +61,6 @@ export default function CustomizationsPage() {
           const data = await res.json()
           if (data.settings) {
             setSettings({ ...defaultSettings, ...data.settings })
-            settingsRef.current = { ...defaultSettings, ...data.settings }
           }
         }
       } catch {

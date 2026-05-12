@@ -1,7 +1,10 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 export async function GET() {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const rows = await db.unansweredQuestion.findMany({
       orderBy: { createdAt: 'desc' },
@@ -14,6 +17,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const body = await request.json()
     const question = String(body.question || '').trim()

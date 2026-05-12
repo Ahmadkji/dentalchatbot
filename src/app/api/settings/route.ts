@@ -1,7 +1,10 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 export async function GET() {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const settings = await db.botSetting.findMany({
       orderBy: [{ category: 'asc' }, { key: 'asc' }],
@@ -33,6 +36,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const body = await request.json();
     const { key, id, value } = body;

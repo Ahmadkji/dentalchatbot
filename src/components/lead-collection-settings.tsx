@@ -53,30 +53,40 @@ export default function LeadCollectionSettings() {
   const [newEmail, setNewEmail] = useState('')
   const settingsRef = useRef(settings)
 
-  // Keep ref in sync
-  settingsRef.current = settings
-
-  const fetchSettings = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await fetch('/api/lead-settings')
-      if (res.ok) {
-        const data = await res.json()
-        setSettings((prev) => ({ ...prev, ...data.settings }))
-        settingsRef.current = { ...settingsRef.current, ...data.settings }
-      }
-
-      const fieldsRes = await fetch('/api/lead-settings/custom-fields')
-    } catch {
-      toast.error('Failed to load settings')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
 
   useEffect(() => {
-    void fetchSettings()
-  }, [fetchSettings])
+    let cancelled = false
+
+    const loadSettings = async () => {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/lead-settings')
+        if (!cancelled && res.ok) {
+          const data = await res.json()
+          setSettings((prev) => ({ ...prev, ...data.settings }))
+        }
+
+        await fetch('/api/lead-settings/custom-fields')
+      } catch {
+        if (!cancelled) {
+          toast.error('Failed to load settings')
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadSettings()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const saveSettings = useCallback(async (settingsToSave?: Record<string, string>) => {
     const data = settingsToSave || settingsRef.current

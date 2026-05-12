@@ -1,10 +1,14 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth, requireOwnership } from '@/lib/auth-helpers';
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const { id } = await params;
     const body = await request.json();
@@ -12,12 +16,8 @@ export async function PATCH(
 
     const existing = await db.appointmentRequest.findUnique({ where: { id } });
 
-    if (!existing) {
-      return NextResponse.json(
-        { error: 'Appointment request not found' },
-        { status: 404 }
-      );
-    }
+    const ownershipError = requireOwnership(existing, user.id);
+    if (ownershipError) return ownershipError;
 
     const data: Record<string, unknown> = {};
     if (status !== undefined) data.status = status;
@@ -47,17 +47,16 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const { id } = await params;
 
     const existing = await db.appointmentRequest.findUnique({ where: { id } });
 
-    if (!existing) {
-      return NextResponse.json(
-        { error: 'Appointment request not found' },
-        { status: 404 }
-      );
-    }
+    const ownershipError = requireOwnership(existing, user.id);
+    if (ownershipError) return ownershipError;
 
     await db.appointmentRequest.delete({ where: { id } });
 

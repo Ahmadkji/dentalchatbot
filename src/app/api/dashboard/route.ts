@@ -1,6 +1,7 @@
 import { db } from '@/lib/db';
 import { clinicData, getDefaultClinic } from '@/lib/clinic-data';
 import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
@@ -15,6 +16,9 @@ function todayLocalPrefix() {
 }
 
 export async function GET() {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const clinic = await getDefaultClinic();
     const clinicId = clinic?.id || null;

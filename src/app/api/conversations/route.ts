@@ -1,8 +1,12 @@
 import { db } from '@/lib/db';
 import type { Conversation } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 export async function GET(request: NextRequest) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const status = searchParams.get('status');
@@ -83,6 +87,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const { user, error: authError } = await requireAuth();
+  if (authError) return authError;
+
   try {
     const body = await request.json();
     const { patientId, channel, subject } = body;

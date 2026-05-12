@@ -1,9 +1,12 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-helpers';
 
 const VALID_TYPES = ['text', 'textarea', 'select', 'number', 'email', 'tel'];
 
 export async function GET() {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const fields = await db.leadCustomField.findMany({
       orderBy: { order: 'asc' },
@@ -19,6 +22,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth();
+  if (authError) return authError;
   try {
     const body = await request.json();
     const { label, fieldType, required, options, placeholder } = body;

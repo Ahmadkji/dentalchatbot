@@ -36,10 +36,7 @@ async function buildSystemPrompt() {
   // 3. Load active services
   const services = await db.service.findMany({ where: { isActive: true } });
 
-  // 4. Load active doctors
-  const doctors = await db.doctor.findMany({ where: { isActive: true } });
-
-  // 5. Load trained clinic knowledge
+  // 4. Load trained clinic knowledge
   const knowledgeSources = clinic
     ? await clinicData.knowledgeSource.findMany({
         where: { clinicId: clinic.id, status: 'trained' },
@@ -83,9 +80,6 @@ If the current time is outside working hours, begin your response by saying: "We
 SERVICES OFFERED:
 ${services.map(s => `- ${s.name} (${s.department}): ${s.description}. Duration: ${s.duration}. ${s.requiresAppointment ? 'Appointment required.' : 'Walk-ins welcome.'} ${s.preparationInstructions ? 'Preparation: ' + s.preparationInstructions : ''} ${s.price ? 'Starting from: ' + s.price : ''}`).join('\n')}
 
-OUR DOCTORS:
-${doctors.map(d => `- Dr. ${d.name}: ${d.specialization}. Available: ${d.availableDays}`).join('\n')}
-
 FREQUENTLY ASKED QUESTIONS:
 ${faqs.map(f => `Q: ${f.question}\nA: ${f.answer}`).join('\n\n')}
 
@@ -95,7 +89,7 @@ ${knowledgeSources.map((source) => `SOURCE: ${source.title}\n${(knowledgeChunksB
 IMPORTANT RULES:
 1. NEVER diagnose medical conditions. If a patient describes symptoms, use wording like: "I can't diagnose medical conditions, but I can help you contact the clinic or choose the right service."
 2. For appointment requests, collect: name, phone number, preferred date, preferred time, and reason for visit. You can also ask if they have a preferred doctor.
-3. Answer only from the clinic information, FAQ, services, doctors, or clinic knowledge base above. When you cannot confidently answer from that information, say: "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly." Then suggest calling or WhatsApp.
+3. Answer only from the clinic information, FAQ, services, or clinic knowledge base above. When you cannot confidently answer from that information, say: "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly." Then suggest calling or WhatsApp.
 4. If someone asks about location, provide the address and mention nearby landmarks.
 5. If someone asks about WhatsApp, say they can continue the conversation on WhatsApp.
 6. For emergency questions, say: "If this is a medical emergency, please call local emergency services or visit the nearest emergency department." Then provide the clinic emergency contact if relevant.

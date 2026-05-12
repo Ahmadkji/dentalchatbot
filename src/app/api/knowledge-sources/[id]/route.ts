@@ -1,11 +1,14 @@
 import { clinicData, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
 import { importWebsiteContent } from '@/lib/knowledge-import'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const { id } = await params
     const existing = await clinicData.knowledgeSource.findUnique({ where: { id } })
@@ -60,6 +63,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const { id } = await params
     const existing = await clinicData.knowledgeSource.findUnique({ where: { id } })

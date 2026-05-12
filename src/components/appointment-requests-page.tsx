@@ -56,7 +56,6 @@ interface AppointmentRequest {
   preferredDate: string
   preferredTime: string
   reason: string
-  preferredDoctor: string | null
   status: string
   source: string
   createdAt: string
@@ -83,7 +82,6 @@ const emptyForm = {
   preferredDate: '',
   preferredTime: '',
   reason: '',
-  preferredDoctor: '',
   source: 'website',
 }
 
@@ -117,8 +115,35 @@ export default function AppointmentRequestsPage() {
   }, [statusFilter])
 
   useEffect(() => {
-    fetchRequests()
-  }, [fetchRequests])
+    let cancelled = false
+
+    const loadRequests = async () => {
+      setLoading(true)
+      try {
+        const params = new URLSearchParams()
+        if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter)
+        const res = await fetch(`/api/appointment-requests?${params.toString()}`)
+        if (!cancelled && res.ok) {
+          const data = await res.json()
+          setRequests(data.appointmentRequests || data.requests || data || [])
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Failed to load appointment requests')
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadRequests()
+
+    return () => {
+      cancelled = true
+    }
+  }, [statusFilter])
 
   const filteredRequests = requests.filter((r) => {
     const matchesSearch =
@@ -150,7 +175,6 @@ export default function AppointmentRequestsPage() {
     try {
       const body = {
         ...form,
-        preferredDoctor: form.preferredDoctor || null,
       }
       const res = await fetch('/api/appointment-requests', {
         method: 'POST',
@@ -319,29 +343,19 @@ export default function AppointmentRequestsPage() {
                   rows={3}
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Preferred Doctor</Label>
-                  <Input
-                    value={form.preferredDoctor}
-                    onChange={(e) => setForm({ ...form, preferredDoctor: e.target.value })}
-                    placeholder="Any available"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Source</Label>
-                  <Select value={form.source} onValueChange={(v) => setForm({ ...form, source: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="website">Website</SelectItem>
-                      <SelectItem value="chatbot">Chatbot</SelectItem>
-                      <SelectItem value="phone">Phone</SelectItem>
-                      <SelectItem value="walk-in">Walk-in</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="grid gap-2">
+                <Label>Source</Label>
+                <Select value={form.source} onValueChange={(v) => setForm({ ...form, source: v })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="website">Website</SelectItem>
+                    <SelectItem value="chatbot">Chatbot</SelectItem>
+                    <SelectItem value="phone">Phone</SelectItem>
+                    <SelectItem value="walk-in">Walk-in</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <DialogFooter>
@@ -371,7 +385,6 @@ export default function AppointmentRequestsPage() {
                 <TableHead className="hidden md:table-cell">Pref. Date</TableHead>
                 <TableHead className="hidden lg:table-cell">Pref. Time</TableHead>
                 <TableHead className="hidden lg:table-cell">Reason</TableHead>
-                <TableHead className="hidden lg:table-cell">Pref. Doctor</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="hidden md:table-cell">Source</TableHead>
                 <TableHead className="hidden lg:table-cell">Created</TableHead>
@@ -382,7 +395,7 @@ export default function AppointmentRequestsPage() {
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 10 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-20" />
                       </TableCell>
@@ -403,10 +416,7 @@ export default function AppointmentRequestsPage() {
                       {formatTime(request.preferredTime)}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell text-muted-foreground max-w-[150px] truncate">
-                      {request.reason || '—'}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-muted-foreground text-xs">
-                      {request.preferredDoctor || '—'}
+                      {request.reason || '\u2014'}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={request.status} />
@@ -475,7 +485,7 @@ export default function AppointmentRequestsPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     No appointment requests found. Adjust filters or add a new request.
                   </TableCell>
                 </TableRow>
@@ -516,15 +526,11 @@ export default function AppointmentRequestsPage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Preferred Doctor</p>
-                  <p className="text-sm">{selectedRequest.preferredDoctor || 'Any available'}</p>
-                </div>
-                <div>
                   <p className="text-xs text-muted-foreground mb-1">Source</p>
                   <p className="text-sm">
                     {selectedRequest.source
                       ? selectedRequest.source.charAt(0).toUpperCase() + selectedRequest.source.slice(1)
-                      : '—'}
+                      : '\u2014'}
                   </p>
                 </div>
               </div>

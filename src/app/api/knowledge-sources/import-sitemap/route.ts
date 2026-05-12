@@ -1,10 +1,13 @@
 import { createKnowledgeSource, clinicData, getDefaultClinic, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
 import { importSitemapContent } from '@/lib/knowledge-import'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 const MAX_SITEMAP_PAGES = 20
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const clinic = await getDefaultClinic()
     if (!clinic) {

@@ -100,8 +100,35 @@ export default function FAQPage() {
   }, [])
 
   useEffect(() => {
-    fetchFAQs()
-  }, [fetchFAQs])
+    let cancelled = false
+
+    const loadFAQs = async () => {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/faq')
+        if (!cancelled && res.ok) {
+          const data = await res.json()
+          const faqList = data.faqs || data || []
+          faqList.sort((a: FAQ, b: FAQ) => (a.order || 0) - (b.order || 0))
+          setFaqs(faqList)
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Failed to load FAQs')
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadFAQs()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const filteredFAQs = faqs.filter(
     (f) =>

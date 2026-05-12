@@ -1,5 +1,6 @@
 import { importWebsiteContent } from '@/lib/knowledge-import'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
 
 interface DetectedDetail {
   field: string
@@ -150,6 +151,8 @@ function detectClinicDetails(content: string): DetectedDetail[] {
 }
 
 export async function POST(request: NextRequest) {
+  const { error: authError } = await requireAuth()
+  if (authError) return authError
   try {
     const body = await request.json()
     const { url } = body
