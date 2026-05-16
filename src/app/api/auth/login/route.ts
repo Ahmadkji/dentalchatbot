@@ -23,14 +23,15 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Request body is required.' }, 400)
   }
 
-  const mode = (payload as { mode?: string }).mode === 'signup' ? 'signup' : 'signin'
-  const email = typeof (payload as { email?: string }).email === 'string'
-    ? (payload as { email?: string }).email.trim().toLowerCase()
+  const body = payload as { mode?: string; email?: string; password?: string; next?: string }
+  const mode = body.mode === 'signup' ? 'signup' : 'signin'
+  const email = typeof body.email === 'string'
+    ? body.email.trim().toLowerCase()
     : ''
-  const password = typeof (payload as { password?: string }).password === 'string'
-    ? (payload as { password?: string }).password
+  const password = typeof body.password === 'string'
+    ? body.password
     : ''
-  const next = sanitizeNextPath((payload as { next?: string }).next)
+  const next = sanitizeNextPath(body.next)
 
   if (!email) {
     return buildResponse({ error: 'Email address is required.' }, 400)

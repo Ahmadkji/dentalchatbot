@@ -1,64 +1,79 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import {
+  type ClinicSettingKey,
+  listClinicSettings,
+  mapLeadSettings,
+  normalizeLeadSettingsInput,
+  updateClinicSetting,
+} from '@/lib/clinics/settings'
 
 export async function GET() {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
-  try {
-    const allSettings = await db.botSetting.findMany({
-      where: { category: 'lead-collection' },
-    });
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const settings: Record<string, string> = {};
-    for (const s of allSettings) {
-      // Strip 'lead_' prefix for cleaner frontend keys
-      const key = s.key.startsWith('lead_') ? s.key.slice(5) : s.key;
-      settings[key] = s.value;
+  try {
+    const { clinic } = await getCurrentClinic(supabase, user)
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    return NextResponse.json({ settings });
+    const allSettings = await listClinicSettings(supabase, clinic.id)
+    return NextResponse.json({ settings: mapLeadSettings(allSettings) })
   } catch (error) {
-    console.error('Error fetching lead settings:', error);
+    console.error('Error fetching lead settings:', error)
     return NextResponse.json(
       { error: 'Failed to fetch lead settings' },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
 }
 
 export async function PUT(request: NextRequest) {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const { settings } = await request.json();
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can update lead settings.' }, { status: 403 })
+    }
+
+    const clinicId = current.clinic.id
+
+    const { settings } = (await request.json().catch(() => ({}))) as {
+      settings?: Record<string, unknown>
+    }
 
     if (!settings || typeof settings !== 'object') {
       return NextResponse.json(
         { error: 'settings object is required' },
-        { status: 400 }
-      );
+        { status: 400 },
+      )
     }
 
-    for (const [key, value] of Object.entries(settings)) {
-      const fullKey = `lead_${key}`;
-      try {
-        await db.botSetting.update({
-          where: { key: fullKey },
-          data: { value: String(value) },
-        });
-      } catch {
-        // Setting might not exist yet, try to find and skip if not found
-        console.warn(`Setting ${fullKey} not found, skipping`);
-      }
-    }
+    const normalized = normalizeLeadSettingsInput(settings)
 
-    return NextResponse.json({ success: true });
+    await Promise.all(
+      Object.entries(normalized).map(([key, value]) =>
+        updateClinicSetting(supabase, clinicId, key as ClinicSettingKey, value),
+      ),
+    )
+
+    const refreshed = await listClinicSettings(supabase, clinicId)
+    return NextResponse.json({ success: true, settings: mapLeadSettings(refreshed) })
   } catch (error) {
-    console.error('Error updating lead settings:', error);
+    console.error('Error updating lead settings:', error)
     return NextResponse.json(
       { error: 'Failed to update lead settings' },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
 }

@@ -1,60 +1,83 @@
-import { clinicData, getDefaultClinic, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
-import { importWebsiteContent } from '@/lib/knowledge-import'
-import { NextResponse } from 'next/server'
+import { after, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import {
+  listKnowledgeSourcesForClinic,
+  updateKnowledgeSourceDraft,
+} from '@/lib/knowledge/sources'
+import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+
+export const maxDuration = 60
 
 export async function POST() {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const clinic = await getDefaultClinic()
-    if (!clinic) {
-      return NextResponse.json({ error: 'Clinic not found' }, { status: 404 })
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const sources = await clinicData.knowledgeSource.findMany({
-      where: { clinicId: clinic.id },
-      orderBy: { updatedAt: 'desc' },
-    })
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
+    }
 
-    let refreshed = 0
+    const sources = await listKnowledgeSourcesForClinic(supabase, current.clinic.id, { isActive: true })
+
+    let queued = 0
     for (const source of sources) {
       try {
-        if (source.type === 'website' && source.sourceUrl) {
-          const imported = await importWebsiteContent(source.sourceUrl)
-          await clinicData.knowledgeSource.update({
-            where: { id: source.id },
-            data: {
-              title: imported.title,
-              content: imported.content,
-              status: 'processing',
-              errorMessage: null,
-            },
-          })
-          await rebuildKnowledgeSourceChunks(source.id)
-          refreshed += 1
-          continue
-        }
+        await updateKnowledgeSourceDraft(supabase, current.clinic.id, source.id, {
+          status: 'queued',
+          failedReason: null,
+          isActive: true,
+        })
 
-        await clinicData.knowledgeSource.update({
-          where: { id: source.id },
-          data: { status: 'processing', errorMessage: null },
+        await enqueueKnowledgeJob(supabase, {
+          clinicId: current.clinic.id,
+          sourceId: source.id,
+          jobType:
+            source.source_type === 'website_url'
+              ? 'import_website_source'
+              : source.source_type === 'file_upload'
+                ? 'process_file_source'
+                : 'process_source_content',
+          payload:
+            source.source_type === 'website_url'
+              ? {
+                  url: source.source_url,
+                  importMode: 'refresh-all',
+                }
+              : source.source_type === 'file_upload'
+                ? {
+                    ...(source.metadata ?? {}),
+                    fileName: source.file_name,
+                    mimeType: source.file_type,
+                  }
+                : {
+                    sourceType: source.source_type,
+                  },
         })
-        await rebuildKnowledgeSourceChunks(source.id)
-        refreshed += 1
+        queued += 1
       } catch {
-        await clinicData.knowledgeSource.update({
-          where: { id: source.id },
-          data: { status: 'failed', errorMessage: 'Refresh failed for this source.' },
-        })
+        await supabase
+          .from('knowledge_sources')
+          .update({ status: 'failed', failed_reason: 'Refresh failed for this source.' })
+          .eq('clinic_id', current.clinic.id)
+          .eq('id', source.id)
       }
     }
 
+    after(() => processQueuedKnowledgeJobs({ limit: 2, runner: 'api-refresh-all' }).catch(() => {}))
+
     return NextResponse.json({
-      refreshed,
+      refreshed: queued,
       total: sources.length,
-      message: 'Knowledge refresh finished',
-    })
+      queued,
+      message: 'Knowledge refresh queued',
+    }, { status: 202 })
   } catch (error) {
     console.error('Error refreshing knowledge sources:', error)
     return NextResponse.json({ error: 'Failed to refresh knowledge sources' }, { status: 500 })

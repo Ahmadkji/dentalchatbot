@@ -62,19 +62,40 @@ export async function updateSession(request: NextRequest) {
     '/auth/confirm',
   ]
 
-  const protectedPaths = ['/dashboard', '/invoices', '/settings', '/onboarding']
+  const protectedPaths = ['/dashboard', '/settings', '/onboarding']
   const isProtectedPath = protectedPaths.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`)
   )
   const isAuthPath = authPaths.includes(pathname) || pathname.startsWith('/auth/')
+  let onboardingComplete = false
+
+  if (user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('onboarding_completed,default_clinic_id')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    onboardingComplete = Boolean(profile?.onboarding_completed && profile.default_clinic_id)
+  }
 
   if (!user && isProtectedPath) {
     const response = NextResponse.redirect(new URL('/login', request.url))
     return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
   }
 
-  if (user && (pathname === '/' || isAuthPath)) {
+  if (user && isProtectedPath && pathname !== '/onboarding' && !onboardingComplete) {
+    const response = NextResponse.redirect(new URL('/onboarding', request.url))
+    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+  }
+
+  if (user && pathname === '/onboarding' && onboardingComplete) {
     const response = NextResponse.redirect(new URL('/dashboard', request.url))
+    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+  }
+
+  if (user && (pathname === '/' || isAuthPath)) {
+    const response = NextResponse.redirect(new URL(onboardingComplete ? '/dashboard' : '/onboarding', request.url))
     return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
   }
 

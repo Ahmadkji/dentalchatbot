@@ -1,157 +1,252 @@
-import { db } from '@/lib/db';
-import { clinicData, getDefaultClinic } from '@/lib/clinic-data';
-import { NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 function roundOne(value: number): number {
-  return Math.round(value * 10) / 10;
+  return Math.round(value * 10) / 10
 }
 
-function todayLocalPrefix() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date)
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  const asUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  )
+
+  return asUtc - date.getTime()
 }
 
-export async function GET() {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+function clinicDateBoundaryToUtc(dateValue: string | null, timeZone: string, addDays = 0): string | null {
+  if (!dateValue || !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return null
+
+  const [year, month, day] = dateValue.split('-').map(Number)
+  const utcGuess = new Date(Date.UTC(year, month - 1, day + addDays, 0, 0, 0))
+  const offset = getTimeZoneOffsetMs(utcGuess, timeZone)
+  return new Date(utcGuess.getTime() - offset).toISOString()
+}
+
+interface SourceHealthRow {
+  id: string
+  title: string
+  source_type: string
+  status: string
+  chunk_count: number
+  updated_at: string | Date
+  last_synced_at: string | Date | null
+  is_active: boolean
+}
+
+interface DashboardKpiRow {
+  total_conversations: number | string | null
+  open_conversations: number | string | null
+  escalated_conversations: number | string | null
+  resolved_conversations: number | string | null
+  captured_conversations: number | string | null
+  helpful_conversations: number | string | null
+  not_helpful_conversations: number | string | null
+  total_leads: number | string | null
+  new_leads: number | string | null
+  contacted_leads: number | string | null
+  booked_leads: number | string | null
+  unanswered_count: number | string | null
+  source_count: number | string | null
+  trained_source_count: number | string | null
+  stale_source_count: number | string | null
+  total_knowledge_chunks: number | string | null
+  whatsapp_clicks: number | string | null
+  call_clicks: number | string | null
+  location_clicks: number | string | null
+  directions_clicks: number | string | null
+  appointment_event_count: number | string | null
+  after_hours_lead_count: number | string | null
+}
+
+interface DashboardTopServiceRow {
+  service_name: string
+  mention_count: number | string | null
+}
+
+export async function GET(request: NextRequest) {
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const clinic = await getDefaultClinic();
-    const clinicId = clinic?.id || null;
+    const { clinic } = await getCurrentClinic(supabase, user)
 
-    const [
-      totalConversations,
-      openConversations,
-      escalatedConversations,
-      resolvedConversations,
-      capturedConversations,
-      helpfulConversations,
-      notHelpfulConversations,
-      totalLeads,
-      newLeads,
-      contactedLeads,
-      bookedLeads,
-      sourceCount,
-      trainedSourceCount,
-      staleSourceCount,
-      totalKnowledgeChunks,
-      unansweredCount,
-    ] = await Promise.all([
-      db.conversation.count(),
-      db.conversation.count({ where: { status: 'active' } }),
-      db.conversation.count({ where: { status: 'pending' } }),
-      db.conversation.count({ where: { status: 'closed' } }),
-      db.conversation.count({ where: { leadCaptured: true } }),
-      db.conversation.count({ where: { helpfulStatus: 'helpful' } }),
-      db.conversation.count({ where: { helpfulStatus: 'not_helpful' } }),
-      db.lead.count(),
-      db.lead.count({ where: { status: 'new' } }),
-      db.lead.count({ where: { status: 'contacted' } }),
-      db.lead.count({ where: { status: 'booked' } }),
-      clinicId ? clinicData.knowledgeSource.findMany({ where: { clinicId } }).then((rows) => rows.length) : Promise.resolve(0),
-      clinicId ? clinicData.knowledgeSource.findMany({ where: { clinicId, status: 'trained' } }).then((rows) => rows.length) : Promise.resolve(0),
-      clinicId ? clinicData.knowledgeSource.findMany({ where: { clinicId, status: 'needs_refresh' } }).then((rows) => rows.length) : Promise.resolve(0),
-      clinicId ? clinicData.knowledgeChunk.findMany({ where: { clinicId } }).then((rows) => rows.length) : Promise.resolve(0),
-      db.unansweredQuestion.count({ where: { status: 'open' } }),
-    ]);
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const leadCaptureRate = totalConversations > 0 ? roundOne((capturedConversations / totalConversations) * 100) : 0;
-    const reviewedCount = helpfulConversations + notHelpfulConversations;
-    const helpfulRate = reviewedCount > 0 ? roundOne((helpfulConversations / reviewedCount) * 100) : 0;
-    const resolutionRate = totalConversations > 0 ? roundOne((resolvedConversations / totalConversations) * 100) : 0;
-    const afterHoursLeadCount = (await db.lead.findMany()).filter((lead) => {
-      const hour = lead.createdAt.getHours();
-      return hour < 9 || hour >= 18;
-    }).length;
-
-    const [recentConversations, recentLeads, sourceHealthRows, interactionEvents, unansweredRows] = await Promise.all([
-      db.conversation.findMany({
-        take: 8,
-        orderBy: { updatedAt: 'desc' },
-      }),
-      db.lead.findMany({
-        take: 8,
-        orderBy: { createdAt: 'desc' },
-      }),
-      clinicId
-        ? clinicData.knowledgeSource.findMany({
-            where: { clinicId },
-            orderBy: { updatedAt: 'desc' },
-          })
-        : Promise.resolve([]),
-      db.interactionEvent.findMany({ orderBy: { createdAt: 'desc' } }),
-      db.unansweredQuestion.findMany({
-        where: { status: 'open' },
-        orderBy: { createdAt: 'desc' },
-      }),
-    ]);
-
-    const today = todayLocalPrefix();
-    const todayEvents = interactionEvents.filter((event) => event.createdAt.toISOString().startsWith(today));
-    const whatsappClicks = todayEvents.filter((event) => event.eventType === 'whatsapp_click').length;
-    const callClicks = todayEvents.filter((event) => event.eventType === 'call_click').length;
-    const locationClicks = todayEvents.filter((event) => event.eventType === 'location_click').length;
-    const directionsClicks = todayEvents.filter((event) => event.eventType === 'directions_click').length;
-    const appointmentEventCount = todayEvents.filter((event) => event.eventType === 'appointment_request').length;
-
-    const leads = await db.lead.findMany();
-    const topServicesAsked = Object.entries(
-      leads.reduce<Record<string, number>>((acc, lead) => {
-        const key = (lead.service || 'General consultation').trim();
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {})
+    const adminClient = createSupabaseAdminClient()
+    const clinicId = clinic.id
+    const startAt = clinicDateBoundaryToUtc(request.nextUrl.searchParams.get('startDate'), clinic.timezone)
+    const endAt = clinicDateBoundaryToUtc(
+      request.nextUrl.searchParams.get('endDate') ?? request.nextUrl.searchParams.get('startDate'),
+      clinic.timezone,
+      1,
     )
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([service, count]) => ({ service, count }));
 
-    const flattenedConversations = await Promise.all(
-      recentConversations.map(async (conversation) => {
-        const patient = await db.patient.findUnique({ where: { id: conversation.patientId } });
-        return {
-          id: conversation.id,
-          visitorName: patient?.name || 'Website Visitor',
-          status: conversation.status,
-          messageCount: conversation.messageCount,
-          leadCaptured: conversation.leadCaptured,
-          helpfulStatus: conversation.helpfulStatus,
-          sourcePage: conversation.sourcePage,
-          updatedAt: conversation.updatedAt,
-        };
+    const { data: kpiRow, error: kpiError } = await adminClient
+      .rpc('get_dashboard_kpis', {
+        p_clinic_id: clinicId,
+        p_start_at: startAt,
+        p_end_at: endAt,
       })
-    );
+      .maybeSingle()
 
-    const flattenedLeads = recentLeads.map((lead) => ({
+    if (kpiError) throw kpiError
+
+    const kpis = (kpiRow ?? {}) as Partial<DashboardKpiRow>
+    const totalConversations = Number(kpis.total_conversations ?? 0)
+    const openConversations = Number(kpis.open_conversations ?? 0)
+    const escalatedConversations = Number(kpis.escalated_conversations ?? 0)
+    const resolvedConversations = Number(kpis.resolved_conversations ?? 0)
+    const capturedConversations = Number(kpis.captured_conversations ?? 0)
+    const helpfulConversations = Number(kpis.helpful_conversations ?? 0)
+    const notHelpfulConversations = Number(kpis.not_helpful_conversations ?? 0)
+    const totalLeads = Number(kpis.total_leads ?? 0)
+    const newLeads = Number(kpis.new_leads ?? 0)
+    const contactedLeads = Number(kpis.contacted_leads ?? 0)
+    const bookedLeads = Number(kpis.booked_leads ?? 0)
+    const unansweredCount = Number(kpis.unanswered_count ?? 0)
+    const sourceCount = Number(kpis.source_count ?? 0)
+    const trainedSourceCount = Number(kpis.trained_source_count ?? 0)
+    const staleSourceCount = Number(kpis.stale_source_count ?? 0)
+    const totalKnowledgeChunks = Number(kpis.total_knowledge_chunks ?? 0)
+    const whatsappClicks = Number(kpis.whatsapp_clicks ?? 0)
+    const callClicks = Number(kpis.call_clicks ?? 0)
+    const locationClicks = Number(kpis.location_clicks ?? 0)
+    const directionsClicks = Number(kpis.directions_clicks ?? 0)
+    const appointmentEventCount = Number(kpis.appointment_event_count ?? 0)
+    const afterHoursLeadCount = Number(kpis.after_hours_lead_count ?? 0)
+
+    const leadCaptureRate = totalConversations > 0 ? roundOne((capturedConversations / totalConversations) * 100) : 0
+    const reviewedCount = helpfulConversations + notHelpfulConversations
+    const helpfulRate = reviewedCount > 0 ? roundOne((helpfulConversations / reviewedCount) * 100) : 0
+    const resolutionRate = totalConversations > 0 ? roundOne((resolvedConversations / totalConversations) * 100) : 0
+
+    // Recent data + events
+    const [
+      recentConversations,
+      recentLeads,
+      topServicesResult,
+      unansweredRows,
+      sourceSummaryRows,
+      chunkSummary,
+      sourceHealthRows,
+    ] = await Promise.all([
+      adminClient
+        .from('conversations')
+        .select('*')
+        .eq('clinic_id', clinicId)
+        .order('updated_at', { ascending: false })
+        .limit(8),
+      adminClient
+        .from('leads')
+        .select('*')
+        .eq('clinic_id', clinicId)
+        .order('created_at', { ascending: false })
+        .limit(8),
+      adminClient.rpc('get_dashboard_top_services', {
+        p_clinic_id: clinicId,
+        p_start_at: startAt,
+        p_end_at: endAt,
+        p_limit: 5,
+      }),
+      adminClient
+        .from('unanswered_questions')
+        .select('*')
+        .eq('clinic_id', clinicId)
+        .eq('status', 'open')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('knowledge_sources')
+        .select('id,status,is_active')
+        .eq('clinic_id', clinicId)
+        .neq('source_type', 'faq'),
+      supabase
+        .from('knowledge_chunks')
+        .select('id', { count: 'exact', head: true })
+        .eq('clinic_id', clinicId)
+        .eq('is_active', true),
+      supabase
+        .from('knowledge_sources')
+        .select('id,title,source_type,status,chunk_count,updated_at,last_synced_at,is_active')
+        .eq('clinic_id', clinicId)
+        .neq('source_type', 'faq')
+        .order('updated_at', { ascending: false })
+        .limit(8),
+    ])
+
+    if (sourceSummaryRows.error) throw sourceSummaryRows.error
+    if (chunkSummary.error) throw chunkSummary.error
+    if (sourceHealthRows.error) throw sourceHealthRows.error
+    if (topServicesResult.error) throw topServicesResult.error
+
+    const topServicesAsked = ((topServicesResult.data ?? []) as DashboardTopServiceRow[]).map((row) => ({
+      service: row.service_name,
+      count: Number(row.mention_count ?? 0),
+    }))
+
+    const flattenedConversations = (recentConversations.data ?? []).map((conv) => ({
+      id: conv.id,
+      visitorName: conv.visitor_name || 'Website Visitor',
+      status: conv.status,
+      messageCount: conv.message_count,
+      leadCaptured: conv.lead_captured,
+      helpfulStatus: conv.helpful_status,
+      sourcePage: conv.source_page,
+      updatedAt: conv.updated_at,
+    }))
+
+    const flattenedLeads = (recentLeads.data ?? []).map((lead) => ({
       id: lead.id,
       name: lead.name,
       status: lead.status,
-      preferredContact: lead.preferredContact,
+      preferredContact: lead.preferred_contact,
       source: lead.source,
-      createdAt: lead.createdAt,
-    }));
+      createdAt: lead.created_at,
+    }))
 
-    const sourceHealth = sourceHealthRows.slice(0, 8).map((source) => ({
+    const sourceHealth = ((sourceHealthRows.data ?? []) as SourceHealthRow[]).slice(0, 8).map((source) => ({
       id: source.id,
       title: source.title,
-      type: source.type,
+      type:
+        source.source_type === 'website_url'
+          ? 'website'
+          : source.source_type === 'file_upload'
+            ? 'file'
+            : source.source_type,
       status: source.status,
-      chunkCount: source.chunkCount,
-      updatedAt: source.updatedAt,
-      lastSyncedAt: source.lastSyncedAt,
-    }));
+      chunkCount: source.chunk_count,
+      updatedAt: source.updated_at,
+      lastSyncedAt: source.last_synced_at,
+    }))
 
-    const unansweredPreview = unansweredRows.slice(0, 6).map((row) => ({
+    const unansweredPreview = (unansweredRows.data ?? []).slice(0, 6).map((row) => ({
       id: row.id,
       question: row.question,
-      sourcePage: row.sourcePage,
-      createdAt: row.createdAt,
+      sourcePage: row.source_page,
+      createdAt: row.created_at,
       status: row.status,
-    }));
+    }))
 
     return NextResponse.json({
       stats: {
@@ -183,12 +278,9 @@ export async function GET() {
       sourceHealth,
       unansweredPreview,
       topServicesAsked,
-    });
+    })
   } catch (error) {
-    console.error('Error fetching dashboard analytics:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch dashboard analytics' },
-      { status: 500 }
-    );
+    console.error('Error fetching dashboard analytics:', error)
+    return NextResponse.json({ error: 'Failed to fetch dashboard analytics' }, { status: 500 })
   }
 }

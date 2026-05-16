@@ -55,7 +55,7 @@ const statusColors: Record<string, string> = {
   new: 'bg-sky-50 text-sky-700 border-sky-200',
   contacted: 'bg-amber-50 text-amber-700 border-amber-200',
   booked: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  lost: 'bg-gray-50 text-gray-600 border-gray-200',
+  closed: 'bg-gray-50 text-gray-600 border-gray-200',
   spam: 'bg-red-50 text-red-700 border-red-200',
 }
 
@@ -208,6 +208,10 @@ export default function LeadsPage() {
           <TabsList className="h-8">
             <TabsTrigger value="all" className="text-xs px-3 h-6">All</TabsTrigger>
             <TabsTrigger value="new" className="text-xs px-3 h-6">New</TabsTrigger>
+            <TabsTrigger value="contacted" className="text-xs px-3 h-6">Contacted</TabsTrigger>
+            <TabsTrigger value="booked" className="text-xs px-3 h-6">Booked</TabsTrigger>
+            <TabsTrigger value="closed" className="text-xs px-3 h-6">Closed</TabsTrigger>
+            <TabsTrigger value="spam" className="text-xs px-3 h-6">Spam</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="relative w-full min-w-[180px] sm:max-w-sm sm:flex-1">
@@ -380,6 +384,18 @@ export default function LeadsPage() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => updateStatus(lead.id, 'new')}>
                               Mark as New
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'contacted')}>
+                              Mark as Contacted
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'booked')}>
+                              Mark as Booked
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'closed')}>
+                              Mark as Closed
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatus(lead.id, 'spam')}>
+                              Mark as Spam
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>

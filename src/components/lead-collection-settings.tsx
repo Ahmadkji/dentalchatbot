@@ -32,7 +32,7 @@ const defaultSettings: Record<string, string> = {
   trigger_message_count: '1',
   trigger_keywords: 'pricing, demo, consultation, quote, appointment, contact, schedule, buy, purchase',
   notifications_enabled: 'true',
-  notification_emails: 'pintexlab@gmail.com',
+  notification_emails: '',
   auto_escalation: 'false',
 }
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Upload as TusUpload } from 'tus-js-client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -72,6 +73,7 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 
 // --- Types ---
 
@@ -80,12 +82,15 @@ type ImportType = 'single' | 'homepage' | 'sitemap'
 interface KnowledgeSource {
   id: string
   title: string
-  type: 'manual_text' | 'website' | 'file'
+  type: 'manual_text' | 'website' | 'file' | 'faq'
+  sourceType?: 'manual_text' | 'website_url' | 'file_upload' | 'faq'
   content: string
   sourceUrl: string | null
   fileName: string | null
-  status: 'processing' | 'trained' | 'failed' | 'needs_refresh'
+  status: 'draft' | 'queued' | 'processing' | 'trained' | 'failed' | 'needs_review' | 'disabled'
+  isActive?: boolean
   chunkCount: number
+  trainedAt?: string | null
   lastSyncedAt: string | null
   errorMessage: string | null
   updatedAt: string
@@ -101,10 +106,13 @@ interface DetectedDetail {
 // --- Config ---
 
 const statusConfig: Record<KnowledgeSource['status'], { label: string; className: string; icon: React.ComponentType<{ className?: string }> }> = {
+  draft: { label: 'Draft', className: 'bg-slate-50 text-slate-700 border-slate-200', icon: Pencil },
+  queued: { label: 'Queued', className: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: Loader2 },
   processing: { label: 'Processing', className: 'bg-amber-50 text-amber-700 border-amber-200', icon: Loader2 },
   trained: { label: 'Trained', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: CheckCircle2 },
   failed: { label: 'Failed', className: 'bg-red-50 text-red-700 border-red-200', icon: AlertCircle },
-  needs_refresh: { label: 'Needs Refresh', className: 'bg-sky-50 text-sky-700 border-sky-200', icon: RefreshCw },
+  needs_review: { label: 'Needs Review', className: 'bg-sky-50 text-sky-700 border-sky-200', icon: RefreshCw },
+  disabled: { label: 'Disabled', className: 'bg-slate-100 text-slate-600 border-slate-200', icon: AlertCircle },
 }
 
 const detailIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -181,6 +189,18 @@ export default function KnowledgeBasePage() {
     return () => window.clearTimeout(timer)
   }, [fetchSources])
 
+  useEffect(() => {
+    if (!sources.some((source) => source.status === 'queued' || source.status === 'processing')) {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      void fetchSources()
+    }, 5000)
+
+    return () => window.clearInterval(interval)
+  }, [fetchSources, sources])
+
   const filteredSources = useMemo(
     () =>
       sources.filter((source) => {
@@ -247,7 +267,7 @@ export default function KnowledgeBasePage() {
         body: JSON.stringify(form),
       })
       if (!res.ok) throw new Error('Failed to save')
-      toast.success(editingSource ? 'Knowledge updated' : 'Knowledge source added')
+      toast.success(editingSource ? 'Knowledge update queued' : 'Knowledge source queued for training')
       setDialogOpen(false)
       setForm(emptyForm)
       setEditingSource(null)
@@ -283,7 +303,7 @@ export default function KnowledgeBasePage() {
           throw new Error(errData.error || 'Failed to import sitemap')
         }
         const data = await res.json()
-        toast.success(`Imported ${data.importedCount} pages from sitemap`)
+        toast.success(data.message || 'Sitemap import queued')
         setWebsiteDialogOpen(false)
         setSitemapUrl('')
         setImportUrl('')
@@ -307,7 +327,7 @@ export default function KnowledgeBasePage() {
         }
 
         const imported = await res.json()
-        toast.success(importType === 'homepage' ? 'Website homepage imported successfully' : 'Website page imported successfully')
+        toast.success(importType === 'homepage' ? 'Homepage import queued' : 'Website page import queued')
 
         // Auto-detect details after successful import
         if (imported?.id) {
@@ -342,6 +362,73 @@ export default function KnowledgeBasePage() {
 
   // --- Handlers: file upload ---
 
+  const uploadFileToStorage = async (
+    file: File,
+    preparation: {
+      source: { id: string }
+      upload: {
+        bucketName: string
+        storagePath: string
+        token: string
+        strategy: 'standard' | 'resumable'
+        fileName: string
+        mimeType: string
+        fileSizeBytes: number
+      }
+    },
+  ) => {
+    const supabase = createSupabaseBrowserClient()
+
+    if (preparation.upload.strategy === 'standard') {
+      const standardUpload = await supabase.storage
+        .from(preparation.upload.bucketName)
+        .uploadToSignedUrl(preparation.upload.storagePath, preparation.upload.token, file)
+
+      if (standardUpload.error) {
+        throw standardUpload.error
+      }
+
+      return
+    }
+
+    const projectUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    if (!projectUrl) {
+      throw new Error('Supabase URL is missing.')
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const uploader = new TusUpload(file, {
+        endpoint: `${projectUrl}/storage/v1/upload/resumable`,
+        uploadDataDuringCreation: true,
+        removeFingerprintOnSuccess: true,
+        retryDelays: [0, 1000, 3000],
+        headers: {
+          'x-signature': preparation.upload.token,
+          'x-upsert': 'false',
+        },
+        metadata: {
+          bucketName: preparation.upload.bucketName,
+          objectName: preparation.upload.storagePath,
+          contentType: file.type || preparation.upload.mimeType,
+          cacheControl: '3600',
+        },
+        onError(error) {
+          reject(error)
+        },
+        onSuccess() {
+          resolve()
+        },
+      })
+
+      uploader.findPreviousUploads().then((previousUploads) => {
+        if (previousUploads.length > 0) {
+          uploader.resumeFromPreviousUpload(previousUploads[0])
+        }
+        uploader.start()
+      }).catch(reject)
+    })
+  }
+
   const handleUpload = async () => {
     if (!selectedFile) {
       toast.error('Please choose a file')
@@ -349,16 +436,47 @@ export default function KnowledgeBasePage() {
     }
     setSubmitting(true)
     try {
-      const data = new FormData()
-      data.append('file', selectedFile)
-      const res = await fetch('/api/knowledge-sources/upload', { method: 'POST', body: data })
-      if (!res.ok) throw new Error('Failed to upload file')
-      toast.success('File imported into knowledge base')
+      const prepareRes = await fetch('/api/knowledge-sources/upload/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: selectedFile.name,
+          mimeType: selectedFile.type,
+          fileSizeBytes: selectedFile.size,
+        }),
+      })
+
+      const prepareData = await prepareRes.json().catch(() => null)
+      if (!prepareRes.ok || !prepareData?.upload || !prepareData?.source?.id) {
+        throw new Error(prepareData?.error || 'Failed to prepare file upload')
+      }
+
+      await uploadFileToStorage(selectedFile, prepareData)
+
+      const finalizeRes = await fetch('/api/knowledge-sources/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: prepareData.source.id,
+          bucketName: prepareData.upload.bucketName,
+          storagePath: prepareData.upload.storagePath,
+          fileName: prepareData.upload.fileName,
+          mimeType: prepareData.upload.mimeType,
+          fileSizeBytes: prepareData.upload.fileSizeBytes,
+        }),
+      })
+
+      const finalized = await finalizeRes.json().catch(() => null)
+      if (!finalizeRes.ok) {
+        throw new Error(finalized?.error || 'Failed to finalize file upload')
+      }
+
+      toast.success('File queued for knowledge processing')
       setUploadDialogOpen(false)
       setSelectedFile(null)
       fetchSources()
-    } catch {
-      toast.error('Failed to upload file')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to upload file')
     } finally {
       setSubmitting(false)
     }
@@ -372,7 +490,7 @@ export default function KnowledgeBasePage() {
       const res = await fetch('/api/knowledge-sources/refresh', { method: 'POST' })
       if (!res.ok) throw new Error('Failed to refresh sources')
       const data = await res.json()
-      toast.success(`Refreshed ${data.refreshed}/${data.total} sources`)
+      toast.success(`Queued ${data.queued ?? data.refreshed}/${data.total} sources for refresh`)
       fetchSources()
     } catch {
       toast.error('Failed to refresh sources')
@@ -389,7 +507,7 @@ export default function KnowledgeBasePage() {
         body: JSON.stringify({ refresh: source.type === 'website', retrain: source.type !== 'website' }),
       })
       if (!res.ok) throw new Error('Failed to refresh source')
-      toast.success(source.type === 'website' ? 'Website content refreshed' : 'Knowledge retrained')
+      toast.success(source.type === 'website' ? 'Website refresh queued' : 'Knowledge retraining queued')
       fetchSources()
     } catch {
       toast.error('Failed to refresh source')
@@ -561,10 +679,13 @@ export default function KnowledgeBasePage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="draft">Draft</SelectItem>
+            <SelectItem value="queued">Queued</SelectItem>
             <SelectItem value="trained">Trained</SelectItem>
             <SelectItem value="processing">Processing</SelectItem>
             <SelectItem value="failed">Failed</SelectItem>
-            <SelectItem value="needs_refresh">Needs refresh</SelectItem>
+            <SelectItem value="needs_review">Needs review</SelectItem>
+            <SelectItem value="disabled">Disabled</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -609,7 +730,15 @@ export default function KnowledgeBasePage() {
                     </TableCell>
                     <TableCell className="hidden sm:table-cell">
                       <Badge variant="secondary" className="text-xs capitalize">
-                        {source.type === 'website' ? <Globe className="mr-1 size-3" /> : source.type === 'file' ? <Upload className="mr-1 size-3" /> : <Pencil className="mr-1 size-3" />}
+                        {source.type === 'website' ? (
+                          <Globe className="mr-1 size-3" />
+                        ) : source.type === 'file' ? (
+                          <Upload className="mr-1 size-3" />
+                        ) : source.type === 'faq' ? (
+                          <BookText className="mr-1 size-3" />
+                        ) : (
+                          <Pencil className="mr-1 size-3" />
+                        )}
                         {source.type.replace('_', ' ')}
                       </Badge>
                     </TableCell>
@@ -625,7 +754,7 @@ export default function KnowledgeBasePage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className={`${status.className} text-xs`}>
-                        <StatusIcon className={`mr-1 size-3 ${source.status === 'processing' ? 'animate-spin' : ''}`} />
+                        <StatusIcon className={`mr-1 size-3 ${source.status === 'processing' || source.status === 'queued' ? 'animate-spin' : ''}`} />
                         {status.label}
                       </Badge>
                       {source.status === 'failed' && source.errorMessage && (
@@ -775,7 +904,7 @@ export default function KnowledgeBasePage() {
                   <RadioGroupItem value="sitemap" id="r-sitemap" />
                   <Label htmlFor="r-sitemap" className="font-normal cursor-pointer">
                     <span className="font-medium">Sitemap / multiple pages</span>
-                    <span className="block text-xs text-muted-foreground">Import from a sitemap.xml URL (up to 20 pages)</span>
+                    <span className="block text-xs text-muted-foreground">Import from a sitemap.xml URL (up to 10 pages per run)</span>
                   </Label>
                 </div>
               </RadioGroup>
@@ -831,8 +960,8 @@ export default function KnowledgeBasePage() {
           </DialogHeader>
           <div className="space-y-2">
             <Label>Supported files</Label>
-            <Input type="file" accept=".pdf,.docx,.txt,.csv" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
-            <p className="text-xs text-muted-foreground">Max file size 5 MB. Supported: PDF, DOCX, TXT, CSV.</p>
+            <Input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
+            <p className="text-xs text-muted-foreground">Max file size 10 MB. Supported: PDF, DOC, DOCX.</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setUploadDialogOpen(false)}>Cancel</Button>

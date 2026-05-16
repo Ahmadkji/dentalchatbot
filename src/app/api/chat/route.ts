@@ -1,330 +1,938 @@
-import { db } from '@/lib/db';
-import { clinicData, getDefaultClinic } from '@/lib/clinic-data';
-import ZAI from 'z-ai-web-dev-sdk';
-import { NextRequest, NextResponse } from 'next/server';
+import { type CurrentClinicAiProfile, getCurrentClinicAiProfile } from '@/lib/clinics/current'
+import { formatClinicHoursSummary, isClinicOpenNow } from '@/lib/clinics/hours'
+import { searchKnowledgeChunks } from '@/lib/knowledge/sources'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
+import {
+  mintSessionToken,
+  hashSessionToken,
+  CHAT_SESSION_COOKIE,
+  getChatSessionCookieOptions,
+  resolveChatPathType,
+} from '@/lib/chat/session'
+import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
+import { publicSessionTokenSchema, uuidSchema, clinicSlugSchema, widgetAccessTokenSchema } from '@/lib/chat/widget-api-schemas'
+import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
+import { checkWidgetRateLimit, widgetChatRateKey } from '@/lib/widget/widget-rate-limit'
+import { getClientIp } from '@/lib/security'
+import {
+  buildSafeAssistantReply,
+  extractAutomationFields,
+  mapLeadAutomationSettings,
+  mergeAutomationState,
+  shouldCreateAppointmentRequest,
+  shouldCreateLead,
+} from '@/lib/chat/automation'
+import ZAI from 'z-ai-web-dev-sdk'
+import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 
-// Ensure a guest patient exists for chat sessions
-async function getOrCreateGuestPatient() {
-  let guest = await db.patient.findFirst({
-    where: { email: 'guest@dentbot.ai' },
-  });
-  if (!guest) {
-    guest = await db.patient.create({
-      data: {
-        name: 'Guest Patient',
-        email: 'guest@dentbot.ai',
-        phone: '',
-        dob: '',
-        status: 'active',
-      },
-    });
-  }
-  return guest;
+// ─── Types ─────────────────────────────────────────────────────
+
+type CitationRow = {
+  chunkId: string
+  sourceType: string
+  sourceTitle: string
+  retrievalScore: number
+  scoreType: 'lexical' | 'vector' | 'hybrid'
 }
 
-// Build dynamic system prompt from database data
-async function buildSystemPrompt() {
-  const clinic = await getDefaultClinic();
+type UnansweredReason =
+  | 'no_relevant_chunks'
+  | 'unsupported_topic'
+  | 'medical_diagnosis'
+  | 'service_not_found'
+  | 'price_not_found'
 
-  // 1. Load all settings from DB
-  const settings = await db.botSetting.findMany();
-  const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+// ─── Prompt helpers (unchanged from original) ──────────────────
 
-  // 2. Load active FAQs
-  const faqs = await db.fAQ.findMany({ where: { isActive: true }, orderBy: { order: 'asc' } });
+function formatPromptService(service: {
+  name: string
+  category: string | null
+  description: string | null
+  duration_minutes: number
+  price_amount: number | null
+  price_currency: string | null
+  pricing_note: string | null
+}) {
+  const category = service.category ? ` (${service.category})` : ''
+  const description = service.description ? ` ${service.description}` : ''
+  const price = service.price_amount !== null && service.price_currency
+    ? ` Price: ${service.price_currency} ${service.price_amount}.`
+    : service.pricing_note
+      ? ` Pricing: ${service.pricing_note}.`
+      : ' Pricing is not published yet.'
 
-  // 3. Load active services
-  const services = await db.service.findMany({ where: { isActive: true } });
+  return `- ${service.name}${category}:${description} Duration: ${service.duration_minutes} minutes.${price}`
+}
 
-  // 4. Load trained clinic knowledge
-  const knowledgeSources = clinic
-    ? await clinicData.knowledgeSource.findMany({
-        where: { clinicId: clinic.id, status: 'trained' },
-        orderBy: { updatedAt: 'desc' },
-      })
-    : [];
-  const knowledgeChunks = clinic
-    ? await clinicData.knowledgeChunk.findMany({
-        where: { clinicId: clinic.id },
-        orderBy: [{ sourceId: 'asc' }, { order: 'asc' }],
-      })
-    : [];
-  const knowledgeChunksBySource = new Map<string, string[]>();
-
-  for (const chunk of knowledgeChunks) {
-    const existing = knowledgeChunksBySource.get(chunk.sourceId) || [];
-    existing.push(chunk.content);
-    knowledgeChunksBySource.set(chunk.sourceId, existing);
+function formatDateTimeForClinic(timezone: string | null | undefined) {
+  const now = new Date()
+  if (!timezone) {
+    return {
+      iso: now.toISOString(),
+      dayName: now.toLocaleDateString('en-US', { weekday: 'long' }),
+    }
   }
 
-  // 5. Build dynamic system prompt
-  const systemPrompt = `You are the AI assistant for ${clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic'}.
+  return {
+    iso: new Intl.DateTimeFormat('en-CA', {
+      dateStyle: 'short',
+      timeStyle: 'medium',
+      timeZone: timezone,
+    }).format(now),
+    dayName: new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      timeZone: timezone,
+    }).format(now),
+  }
+}
+
+function formatKnowledgeChunks(
+  chunks: Awaited<ReturnType<typeof searchKnowledgeChunks>>,
+) {
+  if (!chunks.length) {
+    return '- No additional trained knowledge matched this question.'
+  }
+
+  return chunks
+    .map((chunk, index) => {
+      const sourceLabel =
+        chunk.source_type === 'faq'
+          ? `FAQ: ${chunk.knowledge_sources.title}`
+          : chunk.source_type === 'manual_text'
+            ? `Manual note: ${chunk.knowledge_sources.title}`
+            : chunk.source_type === 'file_upload'
+              ? `Document: ${chunk.file_name || chunk.knowledge_sources.title}`
+              : `Website: ${chunk.page_title || chunk.knowledge_sources.title}`
+
+      return [
+        `Source ${index + 1} - ${sourceLabel}`,
+        chunk.section_heading ? `Section: ${chunk.section_heading}` : null,
+        chunk.source_url ? `URL: ${chunk.source_url}` : null,
+        chunk.chunk_text,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    })
+    .join('\n\n')
+}
+
+// ─── Clinic resolution ─────────────────────────────────────────
+
+async function getPreviewClinicAiProfile(
+  clinicId: string,
+  userId: string,
+) {
+  const supabase = await createSupabaseRouteClient()
+  if (!supabase) return null
+
+  const { data: membership, error: membershipError } = await supabase
+    .from('clinic_members')
+    .select('clinic_id')
+    .eq('clinic_id', clinicId)
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle()
+
+  if (membershipError) throw membershipError
+  if (!membership) return null
+
+  const { data, error } = await supabase
+    .from('clinic_ai_profile_view')
+    .select('*')
+    .eq('clinic_id', clinicId)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data as CurrentClinicAiProfile | null) ?? null
+}
+
+async function getPublicClinicAiProfile(clinicId: string) {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('clinic_ai_profile_view')
+    .select('*')
+    .eq('clinic_id', clinicId)
+    .eq('status', 'active')
+    .eq('is_live', true)
+    .eq('widget_enabled', true)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data as CurrentClinicAiProfile | null) ?? null
+}
+
+async function getPublicClinicAiProfileBySlug(slug: string) {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('clinic_ai_profile_view')
+    .select('*')
+    .eq('slug', slug)
+    .eq('status', 'active')
+    .eq('is_live', true)
+    .eq('widget_enabled', true)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data as CurrentClinicAiProfile | null) ?? null
+}
+
+// ─── Support level classification ──────────────────────────────
+
+type SupportLevel = 'strong' | 'medium' | 'weak'
+
+function classifySupport(knowledgeChunks: Awaited<ReturnType<typeof searchKnowledgeChunks>>): SupportLevel {
+  if (knowledgeChunks.length === 0) return 'weak'
+
+  const hasHighPriority = knowledgeChunks.some(
+    (c) => c.source_type === 'faq' || c.source_type === 'manual_text'
+  )
+  const hitCount = knowledgeChunks.length
+
+  if (hitCount >= 3 && hasHighPriority) return 'strong'
+  if (hitCount >= 1) return 'medium'
+  return 'weak'
+}
+
+function detectUnansweredReason(
+  supportLevel: SupportLevel,
+  userMessage: string,
+  aiResponse: string,
+  hasRelevantChunks: boolean,
+): UnansweredReason | null {
+  const lowerMsg = userMessage.toLowerCase()
+  const lowerResp = aiResponse.toLowerCase()
+
+  if (!hasRelevantChunks) return 'no_relevant_chunks'
+
+  const isFallback =
+    lowerResp.includes("i'm not fully sure") ||
+    lowerResp.includes("please contact the clinic directly") ||
+    lowerResp.includes("i can't diagnose")
+
+  if (!isFallback) return null
+
+  if (lowerResp.includes("i can't diagnose") || lowerResp.includes('medical conditions')) {
+    return 'medical_diagnosis'
+  }
+  if (/price|cost|fee|how much/.test(lowerMsg)) {
+    return 'price_not_found'
+  }
+  if (/service|treatment|do you (offer|do|provide)|whitelist/.test(lowerMsg)) {
+    return 'service_not_found'
+  }
+
+  return 'unsupported_topic'
+}
+
+// ─── System prompt builder ─────────────────────────────────────
+
+async function buildSystemPrompt(input: {
+  clinicId?: string | null
+  clinicSlug?: string | null
+  preview?: boolean
+  message: string
+}) {
+  let aiProfile: CurrentClinicAiProfile | null = null
+  let clinicId: string | null = input.clinicId ?? null
+  let userId: string | null = null
+
+  // Resolve clinic context
+  if (input.clinicSlug && !input.clinicId) {
+    // Slug-only resolution (public path)
+    aiProfile = await getPublicClinicAiProfileBySlug(input.clinicSlug)
+    clinicId = aiProfile?.clinic_id ?? null
+  } else if (input.clinicId && input.preview) {
+    // Preview path - needs auth
+    const supabase = await createSupabaseRouteClient()
+    const { data: { user } } = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null } }
+
+    if (user) {
+      aiProfile = await getPreviewClinicAiProfile(input.clinicId, user.id)
+      userId = user.id
+    }
+  } else if (input.clinicId) {
+    // Public path with clinicId
+    aiProfile = await getPublicClinicAiProfile(input.clinicId)
+  } else {
+    // Dashboard path - authenticated, resolve current clinic
+    const supabase = await createSupabaseRouteClient()
+    const { data: { user } } = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null } }
+
+    if (user && supabase) {
+      const current = await getCurrentClinicAiProfile(supabase, user)
+      aiProfile = current?.aiProfile ?? null
+      clinicId = current?.aiProfile?.clinic_id ?? null
+      userId = user.id
+    }
+  }
+
+  const clinicHours = aiProfile
+    ? formatClinicHoursSummary(aiProfile.clinic_hours)
+    : 'The clinic has not added confirmed opening hours yet.'
+  const clinicName = aiProfile?.name || 'the dental clinic'
+  const clinicAddress = aiProfile?.address || 'The clinic has not added its address yet.'
+  const clinicPhone = aiProfile?.phone || 'The clinic has not added its phone number yet.'
+  const whatsappNumber = aiProfile?.whatsapp || ''
+  const appointmentRules = aiProfile?.appointment_rules || 'The clinic has not provided appointment rules yet. Ask the clinic directly.'
+  const pricingNotes = aiProfile?.pricing_notes || 'The clinic has not published pricing notes yet. Do not invent prices.'
+  const emergencyInstructions = aiProfile?.emergency_instructions || aiProfile?.emergency_message || 'If this is severe pain, swelling, bleeding, trauma, or breathing difficulty, contact the clinic or emergency services immediately.'
+  const fallbackMessage = aiProfile?.fallback_message || "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly."
+  const medicalDisclaimer = aiProfile?.medical_disclaimer || "I can't diagnose dental or medical conditions."
+  const servicesBlock = aiProfile?.active_services.length
+    ? aiProfile.active_services.map(formatPromptService).join('\n')
+    : '- The clinic has not published approved services yet.'
+  const afterHours = aiProfile
+    ? !isClinicOpenNow(aiProfile.clinic_hours, aiProfile.timezone)
+    : false
+  const timeContext = formatDateTimeForClinic(aiProfile?.timezone)
+
+  // Knowledge retrieval (lexical FTS)
+  const adminClient = createSupabaseAdminClient()
+  const knowledgeChunks =
+    clinicId && aiProfile
+      ? await searchKnowledgeChunks(adminClient, clinicId, input.message, { limit: 5 })
+      : []
+  const approvedKnowledgeBlock = formatKnowledgeChunks(knowledgeChunks)
+
+  const systemPrompt = `You are the AI assistant for ${clinicName}.
 
 CLINIC INFORMATION:
-- Name: ${clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic'}
-- Address: ${clinic?.address || settingsMap.clinic_address || '123 Dental Street, Health City'}
-- Phone: ${clinic?.primaryPhone || settingsMap.clinic_phone || '(555) 100-2000'}
-- WhatsApp: ${clinic?.whatsappNumber || settingsMap.whatsapp_number || ''}
-- Working Hours: ${clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}
-- Appointment Rules: ${clinic?.appointmentRules || 'Appointments are preferred but walk-ins may be accepted.'}
-- Pricing Notes: ${clinic?.pricingNotes || 'Pricing depends on clinic guidance and treatment plan.'}
-- Emergency Instructions: ${clinic?.emergencyInstructions || settingsMap.emergency_response || 'Contact the clinic directly for urgent help.'}
-- Emergency Line: ${settingsMap.emergency_phone || clinic?.primaryPhone || '(555) 100-2001'}
+- Name: ${clinicName}
+- Address: ${clinicAddress}
+- Phone: ${clinicPhone}
+- WhatsApp: ${whatsappNumber || 'The clinic has not added WhatsApp yet.'}
+- Working Hours: ${clinicHours}
+- Appointment Rules: ${appointmentRules}
+- Pricing Notes: ${pricingNotes}
+- Emergency Instructions: ${emergencyInstructions}
+- Website: ${aiProfile?.website_url || 'The clinic has not added a website yet.'}
+- Map Link: ${aiProfile?.map_link || 'The clinic has not added a map link yet.'}
 
-CURRENT TIME: ${new Date().toISOString()}
-CURRENT DAY: ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}
+CURRENT TIME: ${timeContext.iso}
+CURRENT DAY: ${timeContext.dayName}
 
 AFTER-HOURS DETECTION:
-If the current time is outside working hours, begin your response by saying: "We're currently closed, but I can still help. Our hours are ${clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm'}. You can leave your details and our staff will contact you when we open."
+${afterHours ? `The clinic appears to be closed right now. Begin your first response with: "We're currently closed, but I can still help. Our hours are ${clinicHours}. You can leave your details and our staff will contact you when we open."` : 'The clinic appears open right now based on the saved schedule.'}
 
 SERVICES OFFERED:
-${services.map(s => `- ${s.name} (${s.department}): ${s.description}. Duration: ${s.duration}. ${s.requiresAppointment ? 'Appointment required.' : 'Walk-ins welcome.'} ${s.preparationInstructions ? 'Preparation: ' + s.preparationInstructions : ''} ${s.price ? 'Starting from: ' + s.price : ''}`).join('\n')}
+${servicesBlock}
 
-FREQUENTLY ASKED QUESTIONS:
-${faqs.map(f => `Q: ${f.question}\nA: ${f.answer}`).join('\n\n')}
-
-CLINIC KNOWLEDGE BASE:
-${knowledgeSources.map((source) => `SOURCE: ${source.title}\n${(knowledgeChunksBySource.get(source.id) || []).join('\n')}`).join('\n\n')}
+APPROVED KNOWLEDGE SOURCES:
+${approvedKnowledgeBlock}
 
 IMPORTANT RULES:
-1. NEVER diagnose medical conditions. If a patient describes symptoms, use wording like: "I can't diagnose medical conditions, but I can help you contact the clinic or choose the right service."
+1. NEVER diagnose medical conditions. If a patient describes symptoms, use wording like: "${medicalDisclaimer} I can help you contact the clinic or choose the right service."
 2. For appointment requests, collect: name, phone number, preferred date, preferred time, and reason for visit. You can also ask if they have a preferred doctor.
-3. Answer only from the clinic information, FAQ, services, or clinic knowledge base above. When you cannot confidently answer from that information, say: "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly." Then suggest calling or WhatsApp.
-4. If someone asks about location, provide the address and mention nearby landmarks.
+3. Answer only from the approved clinic information, active services, and approved knowledge sources above. Do not answer from imported website drafts, frontend state, hidden settings, or assumed facts. When information is missing or uncertain, say exactly: "${fallbackMessage}"
+4. If someone asks about location, provide the saved address or map link only. If missing, say the clinic has not added confirmed location details yet.
 5. If someone asks about WhatsApp, say they can continue the conversation on WhatsApp.
-6. For emergency questions, say: "If this is a medical emergency, please call local emergency services or visit the nearest emergency department." Then provide the clinic emergency contact if relevant.
-7. Be warm, professional, and empathetic. Match the tone: ${settingsMap.ai_personality || 'friendly_professional'}.
+6. For emergency questions, first use the saved emergency instructions. If there is severe pain, swelling, bleeding, trauma, or breathing difficulty, tell them to contact the clinic or emergency services immediately.
+7. Be warm, professional, and empathetic. Match the tone: ${aiProfile?.tone || 'friendly'}.
 8. When collecting information (appointments, leads), ask one piece of info at a time naturally in conversation.
 9. If the patient seems to want human help, encourage them to call or use WhatsApp.
-10. Always mention preparation instructions when discussing specific services.`;
+10. Inactive services, unapproved website imports, private staff data, and draft knowledge must never appear in your answer.`
 
-  return { systemPrompt, settingsMap, clinic };
+  return {
+    systemPrompt,
+    userId,
+    afterHours,
+    clinicId,
+    knowledgeChunks,
+    supportLevel: classifySupport(knowledgeChunks),
+    aiProfile,
+    clinicSettings: {
+      clinic_name: clinicName,
+      clinic_address: aiProfile?.address || '',
+      clinic_phone: aiProfile?.phone || '',
+      whatsapp_number: whatsappNumber,
+      clinic_hours: clinicHours,
+      emergency_phone: aiProfile?.phone || '',
+      bot_primary_color: aiProfile?.primary_color || '#059669',
+      welcome_message: aiProfile?.welcome_message || 'Hi! How can I help you today?',
+    },
+  }
 }
 
-// Check if current time is after hours
-function isAfterHours(settingsMap: Record<string, string>): boolean {
-  const now = new Date();
-  const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-  const currentTimeInMinutes = currentHour * 60 + currentMinute;
+// ─── Lead automation settings loader ──────────────────────────
 
-  const hoursStr = settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm';
+async function loadLeadSettings(adminClient: ReturnType<typeof createSupabaseAdminClient>, clinicId: string) {
+  const { data, error } = await adminClient
+    .from('clinic_settings')
+    .select('key,value')
+    .eq('clinic_id', clinicId)
+    .like('key', 'lead_%')
 
-  // Parse working hours
-  // Sunday (0) - closed
-  if (dayOfWeek === 0) return true;
-
-  // Saturday (6) - check Saturday hours
-  if (dayOfWeek === 6) {
-    const satMatch = hoursStr.match(/Sat[^,]*?(\d+)(?::(\d+))?\s*(am|pm)\s*-\s*(\d+)(?::(\d+))?\s*(am|pm)/i);
-    if (satMatch) {
-      const closeHour = parseInt(satMatch[4]);
-      const closeMin = satMatch[5] ? parseInt(satMatch[5]) : 0;
-      const closePeriod = satMatch[6].toLowerCase();
-      let closeTime = closeHour * 60 + closeMin;
-      if (closePeriod === 'pm' && closeHour !== 12) closeTime += 12 * 60;
-      return currentTimeInMinutes > closeTime;
-    }
-    return true; // If can't parse, assume closed on Saturday
+  if (error) {
+    throw error
   }
 
-  // Weekdays (1-5) - check weekday hours
-  const weekdayMatch = hoursStr.match(/Mon-Fri[^,]*?(\d+)(?::(\d+))?\s*(am|pm)\s*-\s*(\d+)(?::(\d+))?\s*(am|pm)/i);
-  if (weekdayMatch) {
-    const openHour = parseInt(weekdayMatch[1]);
-    const openMin = weekdayMatch[2] ? parseInt(weekdayMatch[2]) : 0;
-    const openPeriod = weekdayMatch[3].toLowerCase();
-    const closeHour = parseInt(weekdayMatch[4]);
-    const closeMin = weekdayMatch[5] ? parseInt(weekdayMatch[5]) : 0;
-    const closePeriod = weekdayMatch[6].toLowerCase();
-
-    let openTime = openHour * 60 + openMin;
-    if (openPeriod === 'pm' && openHour !== 12) openTime += 12 * 60;
-    if (openPeriod === 'am' && openHour === 12) openTime = openMin;
-
-    let closeTime = closeHour * 60 + closeMin;
-    if (closePeriod === 'pm' && closeHour !== 12) closeTime += 12 * 60;
-    if (closePeriod === 'am' && closeHour === 12) closeTime = closeMin;
-
-    return currentTimeInMinutes < openTime || currentTimeInMinutes > closeTime;
-  }
-
-  return false; // Default to not after hours if can't parse
+  return mapLeadAutomationSettings((data ?? []) as Array<{ key: string; value: string }>)
 }
+
+// ─── POST handler ──────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { message, conversationId, patientId } = body;
+    const body = await request.json()
+    const { message, conversationId, clinicId, clinicSlug, preview, visitorId, publicSessionToken, widgetAccessToken } = body
 
     if (!message) {
-      return NextResponse.json(
-        { error: 'message is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'message is required' }, { status: 400 })
     }
 
-    // Build dynamic system prompt from DB
-    const { systemPrompt, settingsMap, clinic } = await buildSystemPrompt();
+    // Widget-specific tighter message limit (1000 chars)
+    const isWidgetPublicPath = (clinicId || clinicSlug) && !preview
+    if (isWidgetPublicPath && String(message).trim().length > 1000) {
+      return NextResponse.json({ error: 'message is too long (max 1000 characters for widget)' }, { status: 400 })
+    }
 
-    let conversation;
+    if (String(message).trim().length > 4000) {
+      return NextResponse.json({ error: 'message is too long' }, { status: 400 })
+    }
+
+    // Validate public-session-related fields format before any DB interaction
+    if (conversationId && !uuidSchema.safeParse(conversationId).success) {
+      return NextResponse.json({ error: 'Invalid conversationId format' }, { status: 400 })
+    }
+    if (clinicId && !uuidSchema.safeParse(clinicId).success) {
+      return NextResponse.json({ error: 'Invalid clinicId format' }, { status: 400 })
+    }
+    if (publicSessionToken && !publicSessionTokenSchema.safeParse(publicSessionToken).success) {
+      return NextResponse.json({ error: 'Invalid session token format' }, { status: 400 })
+    }
+    if (clinicSlug && !clinicSlugSchema.safeParse(clinicSlug).success) {
+      return NextResponse.json({ error: 'Invalid clinicSlug format' }, { status: 400 })
+    }
+    if (widgetAccessToken && !widgetAccessTokenSchema.safeParse(widgetAccessToken).success) {
+      return NextResponse.json({ error: 'Invalid widget access token format' }, { status: 400 })
+    }
+
+    // ── Block legacy clinicId-only public path (Finding 1) ────────
+    // Public widget access now requires clinicSlug + widgetAccessToken.
+    if (clinicId && !clinicSlug && !preview) {
+      return NextResponse.json(
+        { error: 'Public widget access requires clinicSlug. Please regenerate your embed code.' },
+        { status: 400 },
+      )
+    }
+
+    // ── Validate widget access token BEFORE heavy work (Finding 2) ─
+    if (clinicSlug && !preview) {
+      if (!widgetAccessToken) {
+        return NextResponse.json({ error: 'Widget access token is required.' }, { status: 401 })
+      }
+      const verifiedToken = verifyWidgetAccessToken(widgetAccessToken)
+      if (!verifiedToken) {
+        return NextResponse.json({ error: 'Widget access token is invalid or expired.' }, { status: 401 })
+      }
+      if (verifiedToken.slug !== clinicSlug) {
+        return NextResponse.json({ error: 'Widget access token does not match this clinic.' }, { status: 403 })
+      }
+
+      // Rate limit before expensive work
+      const effectiveVisitorId = visitorId || getClientIp(request.headers)
+      const ip = getClientIp(request.headers)
+      const rateLimit = checkWidgetRateLimit(widgetChatRateKey(effectiveVisitorId, ip))
+      if (!rateLimit.allowed) {
+        const response = NextResponse.json(
+          { error: 'Too many messages. Please slow down.' },
+          { status: 429 },
+        )
+        response.headers.set('Retry-After', String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)))
+        return response
+      }
+    }
+
+    // Build dynamic system prompt with clinic context and knowledge retrieval
+    const {
+      systemPrompt,
+      userId,
+      afterHours,
+      clinicSettings,
+      aiProfile,
+      knowledgeChunks,
+      supportLevel,
+    } = await buildSystemPrompt({
+      message,
+      clinicId: clinicId ? String(clinicId) : null,
+      clinicSlug: clinicSlug ? String(clinicSlug) : null,
+      preview: Boolean(preview),
+    })
+
+    // For public path with clinicId: validate clinic is live + widget enabled
+    const pathType = resolveChatPathType({
+      clinicId: clinicId ? String(clinicId) : null,
+      clinicSlug: clinicSlug ? String(clinicSlug) : null,
+      preview: Boolean(preview),
+    })
+    const isPublicPath = pathType === 'public'
+    const requiresAuthenticatedAccess = pathType === 'preview' || pathType === 'dashboard'
+
+    if (requiresAuthenticatedAccess && !userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    if ((clinicId || clinicSlug) && !aiProfile) {
+      return NextResponse.json(
+        { error: 'Widget is unavailable for this clinic.' },
+        { status: 404 },
+      )
+    }
+
+    const adminClient = createSupabaseAdminClient()
+
+    // ── Resolve or create conversation ──────────────────────────
+    let conversation: { id: string; clinic_id: string; public_token_hash: string | null }
+    let isNewConversation = false
+    let sessionToken: string | null = null
 
     if (conversationId) {
-      // Load existing conversation
-      conversation = await db.conversation.findUnique({
-        where: { id: conversationId },
-      });
+      // Resume existing conversation - validate access
+      const isPreviewPath = preview && userId
 
-      if (!conversation) {
-        return NextResponse.json(
-          { error: 'Conversation not found' },
-          { status: 404 }
-        );
+      if (isPreviewPath) {
+        // Preview/admin: validate membership
+        const { data: membership } = await adminClient
+          .from('clinic_members')
+          .select('clinic_id')
+          .eq('clinic_id', aiProfile?.clinic_id ?? '')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .maybeSingle()
+
+        if (!membership) {
+          return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        }
+
+        const { data: conv } = await adminClient
+          .from('conversations')
+          .select('id, clinic_id, public_token_hash')
+          .eq('id', conversationId)
+          .eq('clinic_id', aiProfile?.clinic_id)
+          .maybeSingle()
+
+        if (!conv) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+        }
+        conversation = conv
+      } else if (isPublicPath) {
+        // Public: validate via explicit token first (primary), then cookie (fallback)
+        const effectiveClinicId = aiProfile?.clinic_id
+        let conv: { id: string; clinic_id: string; public_token_hash: string | null } | null = null
+
+        if (publicSessionToken && effectiveClinicId) {
+          // Primary path: explicit token from host-page session handoff
+          conv = await validatePublicSessionToken({
+            conversationId,
+            publicSessionToken,
+            expectedClinicId: effectiveClinicId,
+          })
+        }
+
+        if (!conv) {
+          // Fallback: try cookie-based token (with expiry enforcement)
+          const cookieStore = await cookies()
+          const rawToken = cookieStore.get(CHAT_SESSION_COOKIE)?.value
+          if (rawToken && effectiveClinicId) {
+            const cookieConv = await validateCookieTokenFallback({
+              conversationId,
+              rawToken,
+              expectedClinicId: effectiveClinicId,
+            })
+            conv = cookieConv
+          }
+        }
+
+        if (!conv) {
+          return NextResponse.json({ error: 'Session expired. Please start a new conversation.' }, { status: 401 })
+        }
+        conversation = conv
+      } else {
+        // Dashboard authenticated path
+        const { data: conv } = await adminClient
+          .from('conversations')
+          .select('id, clinic_id, public_token_hash')
+          .eq('id', conversationId)
+          .maybeSingle()
+
+        if (!conv) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+        }
+
+        // Verify the user has access to this clinic
+        if (userId) {
+          const { data: membership } = await adminClient
+            .from('clinic_members')
+            .select('clinic_id')
+            .eq('clinic_id', conv.clinic_id)
+            .eq('user_id', userId)
+            .eq('status', 'active')
+            .maybeSingle()
+
+          if (!membership) {
+            return NextResponse.json({ error: 'Not found' }, { status: 404 })
+          }
+        }
+
+        conversation = conv
       }
     } else {
-      // Create a new conversation - use provided patientId or create guest
-      let resolvedPatientId = patientId;
-      if (!resolvedPatientId) {
-        const guest = await getOrCreateGuestPatient();
-        resolvedPatientId = guest.id;
+      // Create new conversation
+      isNewConversation = true
+      const effectiveClinicId = aiProfile?.clinic_id
+      if (!effectiveClinicId) {
+        return NextResponse.json({ error: 'Clinic context required.' }, { status: 400 })
       }
 
-      conversation = await db.conversation.create({
-        data: {
-          patientId: resolvedPatientId,
+      let tokenHash: string | null = null
+      if (isPublicPath) {
+        sessionToken = mintSessionToken()
+        tokenHash = hashSessionToken(sessionToken)
+      }
+
+      const { data: conv, error: createError } = await adminClient
+        .from('conversations')
+        .insert({
+          clinic_id: effectiveClinicId,
           channel: 'web',
           status: 'active',
           subject: message.slice(0, 100),
-          sourcePage: '/',
-          helpfulStatus: 'unreviewed',
-          needsImprovement: false,
-          leadCaptured: false,
-          appointmentRequested: false,
-        },
-      });
+          source_page: '/',
+          helpful_status: 'unreviewed',
+          needs_improvement: false,
+          lead_captured: false,
+          appointment_requested: false,
+          public_token_hash: tokenHash,
+          public_token_expires_at: tokenHash
+            ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+            : null,
+          visitor_id: visitorId || null,
+          visitor_name: null,
+          last_message_at: new Date().toISOString(),
+        })
+        .select('id, clinic_id, public_token_hash')
+        .single()
+
+      if (createError || !conv) {
+        throw createError || new Error('Failed to create conversation')
+      }
+      conversation = conv
     }
 
-    // Save user message
-    const userMessage = await db.message.create({
-      data: {
-        conversationId: conversation.id,
+    // ── Save user message ──────────────────────────────────────
+    const { data: userMessage, error: msgError } = await adminClient
+      .from('conversation_messages')
+      .insert({
+        conversation_id: conversation.id,
         role: 'user',
         content: message,
-      },
-    });
+      })
+      .select('id')
+      .single()
 
-    // Load conversation history
-    const historyMessages = await db.message.findMany({
-      where: { conversationId: conversation.id },
-      orderBy: { createdAt: 'asc' },
-    });
+    if (msgError || !userMessage) {
+      throw msgError || new Error('Failed to save user message')
+    }
 
-    // Build messages array for LLM
+    // ── Load conversation history ──────────────────────────────
+    const { data: historyMessages } = await adminClient
+      .from('conversation_messages')
+      .select('id, role, content')
+      .eq('conversation_id', conversation.id)
+      .order('created_at', { ascending: true })
+
+    // ── Build LLM messages (widget public path: last 10 only) ─────
     const llmMessages: Array<{ role: 'user' | 'system' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
-    ];
+    ]
 
-    // Add conversation history (excluding current message)
-    const historyMessagesFiltered = historyMessages
+    const historyFiltered = (historyMessages ?? [])
       .filter((m) => m.id !== userMessage.id)
       .map((m) => ({
         role: m.role as 'user' | 'system' | 'assistant',
         content: m.content,
-      }));
+      }))
 
-    llmMessages.push(...historyMessagesFiltered);
+    // For public widget path, keep only last 10 messages to control context size
+    if (isPublicPath) {
+      const recentHistory = historyFiltered.slice(-10)
+      llmMessages.push(...recentHistory)
+    } else {
+      llmMessages.push(...historyFiltered)
+    }
+    llmMessages.push({ role: 'user', content: message })
 
-    // Add current user message
-    llmMessages.push({ role: 'user', content: message });
+    // ── Load lead automation settings and extract fields ──────
+    const leadSettings = await loadLeadSettings(adminClient, conversation.clinic_id)
+    const transcriptLines = [
+      ...(historyMessages ?? []).map((row) => `${row.role}: ${row.content}`),
+      `user: ${message}`,
+    ]
+    const automationMessageCount = historyMessages?.length ?? 0
 
-    // Call LLM
-    const zai = await ZAI.create();
+    const extractedFields = extractAutomationFields(transcriptLines)
+
+    const { data: currentConversationStateRow } = await adminClient
+      .from('conversations')
+      .select('automation_state')
+      .eq('id', conversation.id)
+      .single()
+
+    let automationState = mergeAutomationState(
+      currentConversationStateRow?.automation_state,
+      extractedFields,
+    )
+
+    // ── Call LLM ───────────────────────────────────────────────
+    const zai = await ZAI.create()
     const completion = await zai.chat.completions.create({
       messages: llmMessages,
       thinking: { type: 'disabled' },
-    });
+    })
 
-    const aiResponse = completion.choices[0]?.message?.content || 'I apologize, I was unable to generate a response. Please try again.';
-    const lowerMessage = message.toLowerCase();
-    const lowerResponse = aiResponse.toLowerCase();
-    const appointmentRequested = /book|appointment|consultation|call me|contact me/.test(lowerMessage);
-    const needsImprovement = lowerResponse.includes("i'm not fully sure") || lowerResponse.includes("please contact the clinic directly");
+    const aiResponse = completion.choices[0]?.message?.content || 'I apologize, I was unable to generate a response. Please try again.'
+    const finalResponse = buildSafeAssistantReply({
+      aiResponse,
+      supportLevel,
+      latestUserMessage: message,
+      fallbackMessage:
+        aiProfile?.fallback_message ||
+        "I'm not fully sure about that. Please contact the clinic directly so staff can help you correctly.",
+    })
 
-    // Save assistant message
-    const assistantMessage = await db.message.create({
-      data: {
-        conversationId: conversation.id,
+    // ── Save assistant message ─────────────────────────────────
+    const { data: assistantMessage, error: assistMsgError } = await adminClient
+      .from('conversation_messages')
+      .insert({
+        conversation_id: conversation.id,
         role: 'assistant',
-        content: aiResponse,
-      },
-    });
+        content: finalResponse,
+      })
+      .select('id')
+      .single()
 
-    // Update conversation metadata
-    const messageCount = await db.message.count({
-      where: { conversationId: conversation.id },
-    });
+    if (assistMsgError || !assistantMessage) {
+      throw assistMsgError || new Error('Failed to save assistant message')
+    }
 
-    await db.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        messageCount,
-        lastMessage: aiResponse.slice(0, 200),
-        appointmentRequested,
-        leadCaptured: appointmentRequested,
-        needsImprovement,
-      },
-    });
+    const lowerMessage = message.toLowerCase()
 
-    if (needsImprovement) {
-      const normalizedQuestion = message.trim().toLowerCase();
-      const existingUnanswered = await db.unansweredQuestion.findFirst({
-        where: {
-          question: message.trim(),
-          status: 'open',
-        },
-      });
+    // ── Idempotent lead creation ────────────────────────────────
+    if (
+      shouldCreateLead({
+        settings: leadSettings,
+        state: automationState,
+        messageCount: automationMessageCount,
+        latestUserMessage: lowerMessage,
+        supportLevel,
+      })
+    ) {
+      const automationKey = `${conversation.id}:lead:v1`
 
-      if (!existingUnanswered && normalizedQuestion.length > 0) {
-        await db.unansweredQuestion.create({
-          data: {
-            conversationId: conversation.id,
-            question: message.trim(),
-            sourcePage: conversation.sourcePage || '/',
-            status: 'open',
-            answer: null,
+      const { data: lead, error: leadError } = await adminClient
+        .from('leads')
+        .upsert(
+          {
+            clinic_id: conversation.clinic_id,
+            conversation_id: conversation.id,
+            name: automationState.fields.name || 'Website visitor',
+            phone: automationState.fields.phone,
+            email: automationState.fields.email || null,
+            question: message,
+            source: 'chatbot',
+            status: 'new',
+            automation_key: automationKey,
           },
-        });
+          { onConflict: 'clinic_id,automation_key' },
+        )
+        .select('id')
+        .single()
+
+      if (leadError) {
+        throw leadError
+      }
+
+      automationState = {
+        ...automationState,
+        leadId: lead.id,
       }
     }
 
-    // Detect after hours
-    const afterHours = isAfterHours(settingsMap);
+    // ── Idempotent appointment-request creation ─────────────────
+    if (shouldCreateAppointmentRequest({ state: automationState, transcriptLines })) {
+      const automationKey = `${conversation.id}:appointment:v1`
 
-    // Build clinic settings for frontend
-    const clinicSettings = {
-      clinic_name: clinic?.name || settingsMap.clinic_name || 'BrightSmile Dental Clinic',
-      clinic_address: clinic?.address || settingsMap.clinic_address || '123 Dental Street, Health City',
-      clinic_phone: clinic?.primaryPhone || settingsMap.clinic_phone || '(555) 100-2000',
-      whatsapp_number: clinic?.whatsappNumber || settingsMap.whatsapp_number || '',
-      clinic_hours: clinic?.openingHours || settingsMap.clinic_hours || 'Mon-Fri 8am-6pm, Sat 9am-2pm',
-      emergency_phone: settingsMap.emergency_phone || '(555) 100-2001',
-      bot_primary_color: settingsMap.bot_primary_color || '#059669',
-      welcome_message: settingsMap.bot_welcome_message || settingsMap.greeting_message || 'Hi, welcome to BrightSmile Dental Clinic. How can I help you today?',
-    };
+      const { data: appointmentRequest, error: appointmentError } = await adminClient
+        .from('appointment_requests')
+        .upsert(
+          {
+            clinic_id: conversation.clinic_id,
+            conversation_id: conversation.id,
+            lead_id: automationState.leadId,
+            name: automationState.fields.name || 'Website visitor',
+            phone: automationState.fields.phone,
+            email: automationState.fields.email || null,
+            preferred_date: automationState.fields.preferredDate,
+            preferred_time: automationState.fields.preferredTime,
+            reason: automationState.fields.reason || message,
+            preferred_doctor: automationState.fields.preferredDoctor || null,
+            status: 'requested',
+            source: 'chatbot',
+            automation_key: automationKey,
+          },
+          { onConflict: 'clinic_id,automation_key' },
+        )
+        .select('id')
+        .single()
 
-    return NextResponse.json({
+      if (appointmentError) {
+        throw appointmentError
+      }
+
+      automationState = {
+        ...automationState,
+        appointmentRequestId: appointmentRequest.id,
+      }
+    }
+
+    // ── Update conversation metadata ───────────────────────────
+    const { count: messageCount } = await adminClient
+      .from('conversation_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversation.id)
+
+    await adminClient
+      .from('conversations')
+      .update({
+        message_count: messageCount ?? 0,
+        last_message: finalResponse.slice(0, 200),
+        last_message_at: new Date().toISOString(),
+        appointment_requested: Boolean(automationState.appointmentRequestId),
+        lead_captured: Boolean(automationState.leadId),
+        automation_state: automationState,
+        visitor_name: automationState.fields.name || null,
+      })
+      .eq('id', conversation.id)
+
+    // Extend token expiry on valid public activity
+    if (isPublicPath && conversationId) {
+      await extendTokenExpiry(conversation.id)
+    }
+
+    // ── Save citations ─────────────────────────────────────────
+    const citations: CitationRow[] = knowledgeChunks.map((chunk) => {
+      const sourceLabel =
+        chunk.source_type === 'faq'
+          ? `FAQ: ${chunk.knowledge_sources.title}`
+          : chunk.source_type === 'manual_text'
+            ? chunk.knowledge_sources.title
+            : chunk.source_type === 'file_upload'
+              ? chunk.file_name || chunk.knowledge_sources.title
+              : chunk.page_title || chunk.knowledge_sources.title
+
+      return {
+        chunkId: chunk.id,
+        sourceType: chunk.source_type,
+        sourceTitle: sourceLabel,
+        retrievalScore: chunk.retrieval_score ?? 0,
+        scoreType: (chunk.score_type ?? 'lexical') as CitationRow['scoreType'],
+      }
+    })
+
+    if (citations.length > 0 && assistantMessage) {
+      const citationInserts = citations.map((c) => ({
+        message_id: assistantMessage.id,
+        conversation_id: conversation.id,
+        chunk_id: c.chunkId,
+        source_type: c.sourceType,
+        source_title: c.sourceTitle,
+        retrieval_score: c.retrievalScore,
+        score_type: c.scoreType,
+      }))
+
+      await adminClient
+        .from('message_citations')
+        .insert(citationInserts)
+    }
+
+    // ── Unanswered detection ───────────────────────────────────
+    const unansweredReason = detectUnansweredReason(
+      supportLevel,
+      message,
+      finalResponse,
+      knowledgeChunks.length > 0,
+    )
+
+    const needsImprovement = supportLevel === 'weak' || (supportLevel === 'medium' && unansweredReason !== null)
+
+    if (unansweredReason) {
+      // Deduplicate: check for same open question in this clinic
+      const { data: existing } = await adminClient
+        .from('unanswered_questions')
+        .select('id')
+        .eq('clinic_id', conversation.clinic_id)
+        .eq('question', message.trim())
+        .eq('status', 'open')
+        .maybeSingle()
+
+      if (!existing) {
+        await adminClient
+          .from('unanswered_questions')
+          .insert({
+            clinic_id: conversation.clinic_id,
+            conversation_id: conversation.id,
+            question: message.trim(),
+            source_page: '/',
+            reason: unansweredReason,
+            status: 'open',
+          })
+      }
+
+      // Update needs_improvement flag
+      await adminClient
+        .from('conversations')
+        .update({ needs_improvement: true })
+        .eq('id', conversation.id)
+    }
+
+    // ── Build response ─────────────────────────────────────────
+    const responseBody: Record<string, unknown> = {
+      answer: finalResponse,
+      response: finalResponse,       // backward compat
+      reply: finalResponse,          // backward compat
       conversationId: conversation.id,
       messageId: assistantMessage.id,
-      response: aiResponse,
       isAfterHours: afterHours,
+      knowledgeHitCount: knowledgeChunks.length,
+      supportLevel,
       clinicSettings,
-    });
+      citations,
+    }
+
+    // Return publicSessionToken only when new conversation created (for host-page storage)
+    if (isNewConversation && sessionToken) {
+      responseBody.publicSessionToken = sessionToken
+    }
+
+    const response = NextResponse.json(responseBody)
+
+    // Set session cookie for new public conversations (progressive enhancement fallback)
+    if (isNewConversation && sessionToken) {
+      response.cookies.set(CHAT_SESSION_COOKIE, sessionToken, getChatSessionCookieOptions())
+    }
+
+    return response
   } catch (error) {
-    console.error('Error in chat endpoint:', error);
+    console.error('Error in chat endpoint:', error)
     return NextResponse.json(
       { error: 'Failed to process chat message' },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
 }

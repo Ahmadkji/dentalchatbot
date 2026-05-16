@@ -1,0 +1,66 @@
+# DentalGPT Studio
+
+> AI Front Desk for Dental Clinics — https://dentalgptstudio.com
+
+## What is DentalGPT Studio?
+
+DentalGPT Studio is an AI-powered virtual front desk designed specifically for dental clinics. It answers patient questions 24/7, captures appointment requests, and tracks every lead — so your clinic never misses a patient inquiry again.
+
+## Key Features
+
+- **24/7 AI Chat**: Answers patient questions around the clock, including after hours, weekends, and holidays.
+- **Appointment Request Collection**: Patients request appointments directly through the chatbot. Staff reviews and confirms in the dashboard.
+- **Lead Capture & Tracking**: Every patient inquiry becomes a trackable lead with name, phone number, and intent — all logged automatically.
+- **FAQ Builder**: Train the AI with your clinic's common questions, services, hours, insurance, and policies.
+- **Website Widget Embed**: Install on any website in minutes with one line of code. Works with WordPress, Squarespace, Wix, Webflow, and custom sites.
+- **Custom Branding**: Match your clinic's colors, logo, and tone so patients feel like they are talking to your team.
+- **Dashboard & Insights**: View conversations, leads, and appointment requests in a centralized dashboard.
+
+## Target Audience
+
+- Dental clinic owners and office managers
+- Dental practice administrators
+- Dentists looking to automate patient communication
+- Dental support organizations (DSOs)
+
+## Pricing
+
+- **Starter Plan**: Free forever — AI conversations, basic FAQ training, website widget embed. No credit card required.
+- **Professional Plan**: $49/month — Unlimited conversations, appointment request collection, lead capture & tracking, after-hours coverage, dashboard & insights, priority support.
+
+## How to Get Started
+
+1. Sign up at https://dentalgptstudio.com
+2. Add your clinic name, services, hours, and FAQs
+3. Copy one line of embed code onto your website
+4. Your AI front desk is live and answering patients 24/7
+
+## Frequently Asked Questions
+
+**What is an AI front desk for dental clinics?**
+An AI front desk is a virtual assistant that lives on your dental clinic's website. It answers patient questions 24/7, collects appointment requests, and captures lead information.
+
+**Can the AI bot book appointments?**
+Yes. Patients request appointments through the chatbot. The bot collects their preferred date, time, and reason for visit, then logs the request in your dashboard for staff to confirm.
+
+**Does it work with my existing dental website?**
+Yes. DentalGPT Studio works with any website platform — WordPress, Squarespace, Wix, Webflow, and custom HTML. Embed with a single line of JavaScript.
+
+**How long does setup take?**
+Most dental clinics are up and running in under 5 minutes. Add your clinic info, copy the embed code, and the AI starts responding immediately.
+
+**What kind of questions can the dental AI chatbot answer?**
+Any question it's trained on — office hours, accepted insurance plans, service descriptions and pricing, parking directions, new patient forms, and more.
+
+## Use Cases
+
+- After-hours patient inquiry handling
+- Automated new patient lead capture
+- FAQ automation for dental front desk staff
+- Appointment request collection for dental practices
+- Multi-location dental practice communication
+
+## Contact
+
+- Website: https://dentalgptstudio.com
+- Sign Up: https://dentalgptstudio.com/login

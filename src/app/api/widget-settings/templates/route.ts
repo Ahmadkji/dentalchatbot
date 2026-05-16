@@ -1,5 +1,6 @@
-import { clinicData, getDefaultWidgetSettings } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
 
 const templates = {
   clean_dental_blue: {
@@ -54,10 +55,14 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const widgetSettings = await getDefaultWidgetSettings()
-    if (!widgetSettings) {
-      return NextResponse.json({ error: 'Widget settings not found' }, { status: 404 })
+    const { clinic } = await getCurrentClinic(supabase, user)
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
     const body = await request.json()
@@ -67,16 +72,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid templateId' }, { status: 400 })
     }
 
-    const updated = await clinicData.widgetSetting.update({
-      where: { id: widgetSettings.id },
-      data: {
-        primaryColor: selected.primaryColor,
-        textOnPrimary: selected.textOnPrimary,
-        widgetSize: selected.widgetSize,
-        tooltipText: selected.tooltipText,
-        welcomeMessage: selected.welcomeMessage,
-      },
-    })
+    const { data: updated, error } = await supabase
+      .from('widget_settings')
+      .update({
+        primary_color: selected.primaryColor,
+        welcome_message: selected.welcomeMessage,
+      })
+      .eq('clinic_id', clinic.id)
+      .select('id,clinic_id,enabled,widget_title,welcome_message,primary_color,position,show_whatsapp_button,show_call_button,show_location_button,allowed_domains')
+      .single()
+
+    if (error) {
+      return NextResponse.json({ error: 'Failed to apply widget template' }, { status: 400 })
+    }
 
     return NextResponse.json(updated)
   } catch (error) {

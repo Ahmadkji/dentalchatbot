@@ -1,45 +1,63 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireOwnership } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const { status, name, phone, preferredDate, preferredTime, reason, preferredDoctor } = body;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const existing = await db.appointmentRequest.findUnique({ where: { id } });
+    const { id } = await params
+    const body = await request.json()
+    const { status, name, phone, preferredDate, preferredTime, reason, preferredDoctor } = body
 
-    const ownershipError = requireOwnership(existing, user.id);
-    if (ownershipError) return ownershipError;
+    const adminClient = createSupabaseAdminClient()
 
-    const data: Record<string, unknown> = {};
-    if (status !== undefined) data.status = status;
-    if (name !== undefined) data.name = name;
-    if (phone !== undefined) data.phone = phone;
-    if (preferredDate !== undefined) data.preferredDate = preferredDate;
-    if (preferredTime !== undefined) data.preferredTime = preferredTime;
-    if (reason !== undefined) data.reason = reason;
-    if (preferredDoctor !== undefined) data.preferredDoctor = preferredDoctor;
+    // Verify belongs to this clinic
+    const { data: existing, error: findError } = await adminClient
+      .from('appointment_requests')
+      .select('id, clinic_id')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    const appointmentRequest = await db.appointmentRequest.update({
-      where: { id },
-      data,
-    });
+    if (findError) throw findError
+    if (!existing) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
 
-    return NextResponse.json(appointmentRequest);
+    const updateData: Record<string, unknown> = {}
+    if (status !== undefined) updateData.status = status
+    if (name !== undefined) updateData.name = name
+    if (phone !== undefined) updateData.phone = phone
+    if (preferredDate !== undefined) updateData.preferred_date = preferredDate
+    if (preferredTime !== undefined) updateData.preferred_time = preferredTime
+    if (reason !== undefined) updateData.reason = reason
+    if (preferredDoctor !== undefined) updateData.preferred_doctor = preferredDoctor
+
+    const { data: appointmentRequest, error } = await adminClient
+      .from('appointment_requests')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    return NextResponse.json(appointmentRequest)
   } catch (error) {
-    console.error('Error updating appointment request:', error);
-    return NextResponse.json(
-      { error: 'Failed to update appointment request' },
-      { status: 500 }
-    );
+    console.error('Error updating appointment request:', error)
+    return NextResponse.json({ error: 'Failed to update appointment request' }, { status: 500 })
   }
 }
 
@@ -47,25 +65,42 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const existing = await db.appointmentRequest.findUnique({ where: { id } });
+    const { id } = await params
 
-    const ownershipError = requireOwnership(existing, user.id);
-    if (ownershipError) return ownershipError;
+    const adminClient = createSupabaseAdminClient()
 
-    await db.appointmentRequest.delete({ where: { id } });
+    const { data: existing, error: findError } = await adminClient
+      .from('appointment_requests')
+      .select('id, clinic_id')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    return NextResponse.json({ success: true });
+    if (findError) throw findError
+    if (!existing) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const { error } = await adminClient
+      .from('appointment_requests')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+
+    return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error deleting appointment request:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete appointment request' },
-      { status: 500 }
-    );
+    console.error('Error deleting appointment request:', error)
+    return NextResponse.json({ error: 'Failed to delete appointment request' }, { status: 500 })
   }
 }

@@ -22,8 +22,19 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
 }
 
-function applySecurityHeaders(response: NextResponse) {
+function applySecurityHeaders(response: NextResponse, isWidgetFrame = false) {
   Object.entries(SECURITY_HEADERS).forEach(([header, value]) => {
+    // Skip X-Frame-Options for widget frame (it needs to be embeddable)
+    if (isWidgetFrame && header === 'X-Frame-Options') return
+    // Widget frame must allow cross-origin embedding — widget.js on third-party
+    // sites creates an iframe pointing here. The frame-ancestors 'self' would
+    // break the embed. Real protection comes from widget access tokens on
+    // the API routes, not from CSP on this inert iframe shell.
+    if (isWidgetFrame && header === 'Content-Security-Policy') {
+      const widgetCsp = value.replace("frame-ancestors 'none'", 'frame-ancestors *')
+      response.headers.set(header, widgetCsp)
+      return
+    }
     response.headers.set(header, value)
   })
   return response
@@ -40,6 +51,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(httpsUrl, 301)
   }
 
+  const isWidgetFrame = request.nextUrl.pathname.startsWith('/widget-frame')
+
   // Global API rate limiting (Item 19)
   if (request.nextUrl.pathname.startsWith('/api/')) {
     const ip = getClientIp(request.headers)
@@ -51,14 +64,15 @@ export async function middleware(request: NextRequest) {
         { status: 429 }
       )
       response.headers.set('Retry-After', String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)))
-      return applySecurityHeaders(response)
+      return applySecurityHeaders(response, isWidgetFrame)
     }
   }
 
   const supabaseResponse = await updateSession(request)
 
   // Apply security headers to all responses (Item 27)
-  return applySecurityHeaders(supabaseResponse)
+  // /widget-frame gets permissive frame headers to allow embedding
+  return applySecurityHeaders(supabaseResponse, isWidgetFrame)
 }
 
 export const config = {

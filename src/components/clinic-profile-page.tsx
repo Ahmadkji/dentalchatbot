@@ -74,11 +74,15 @@ interface ClinicProfile {
 }
 
 interface DetectedDetail {
+  id: string
   field: string
   label: string
   value: string
   confidence: 'high' | 'medium' | 'low'
   targetField: string
+  sourceSnippet: string
+  canApply: boolean
+  reason?: string
 }
 
 const emptyProfile: ClinicProfile = {
@@ -128,7 +132,9 @@ const detailIcons: Record<string, React.ComponentType<{ className?: string }>> =
   address: MapPin,
   opening_hours: ClockIcon,
   pricing: CreditCard,
+  pricing_notes: CreditCard,
   emergency: AlertCircle,
+  emergency_instructions: AlertCircle,
   name: Globe,
 }
 
@@ -224,8 +230,10 @@ export default function ClinicProfilePage() {
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
   const [selectedDetails, setSelectedDetails] = useState<Set<string>>(new Set())
   const [applying, setApplying] = useState(false)
+  const [activeImportSessionId, setActiveImportSessionId] = useState('')
   const [fetchedUrl, setFetchedUrl] = useState('')
   const [contentPreview, setContentPreview] = useState('')
+  const [editedDetails, setEditedDetails] = useState<Record<string, string>>({})
 
   // Track which fields were auto-populated
   const [autoPopulatedFields, setAutoPopulatedFields] = useState<Set<string>>(new Set())
@@ -353,6 +361,10 @@ export default function ClinicProfilePage() {
   }
 
   const startInlineEdit = (field: keyof ClinicProfile) => {
+    if (field === 'openingHours') {
+      toast.info('Clinic hours now use the structured weekly schedule endpoint.')
+      return
+    }
     if (field === 'isActive') {
       openEditor(field)
       return
@@ -403,6 +415,10 @@ export default function ClinicProfilePage() {
   }
 
   const openEditor = (field: keyof ClinicProfile) => {
+    if (field === 'openingHours') {
+      toast.info('Clinic hours now use the structured weekly schedule endpoint.')
+      return
+    }
     setEditingField(field)
     setEditValue(profile[field] as string | boolean)
     setEditOpen(true)
@@ -465,10 +481,10 @@ export default function ClinicProfilePage() {
 
     setFetching(true)
     try {
-      const res = await fetch('/api/clinic/fetch-from-website', {
+      const res = await fetch('/api/clinic-imports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: fetchUrl.trim() }),
+        body: JSON.stringify({ website_url: fetchUrl.trim() }),
       })
 
       if (!res.ok) {
@@ -477,17 +493,30 @@ export default function ClinicProfilePage() {
       }
 
       const data = await res.json()
+      const session = data.session ?? null
 
-      if (!data.details || data.details.length === 0) {
+      if (!session || !Array.isArray(session.detectedFields) || session.detectedFields.length === 0) {
         toast.info('No clinic details could be detected from this website. Try entering your clinic URL or contact page.')
         setFetching(false)
         return
       }
 
-      setDetectedDetails(data.details)
-      setFetchedUrl(data.url)
+      setDetectedDetails(session.detectedFields)
+      setActiveImportSessionId(session.id)
+      setEditedDetails(
+        Object.fromEntries(
+          session.detectedFields.map((detail: DetectedDetail) => [detail.id, detail.value]),
+        ),
+      )
+      setFetchedUrl(session.websiteUrl)
       setContentPreview(data.contentPreview || '')
-      setSelectedDetails(new Set(data.details.map((d: DetectedDetail) => d.targetField)))
+      setSelectedDetails(
+        new Set(
+          session.detectedFields
+            .filter((detail: DetectedDetail) => detail.canApply)
+            .map((detail: DetectedDetail) => detail.id),
+        ),
+      )
       setFetchDialogOpen(false)
       setPreviewDialogOpen(true)
     } catch (err) {
@@ -497,13 +526,13 @@ export default function ClinicProfilePage() {
     }
   }, [fetchUrl])
 
-  const toggleDetailSelection = (targetField: string) => {
+  const toggleDetailSelection = (fieldId: string) => {
     setSelectedDetails((prev) => {
       const next = new Set(prev)
-      if (next.has(targetField)) {
-        next.delete(targetField)
+      if (next.has(fieldId)) {
+        next.delete(fieldId)
       } else {
-        next.add(targetField)
+        next.add(fieldId)
       }
       return next
     })
@@ -514,40 +543,51 @@ export default function ClinicProfilePage() {
       toast.error('Please select at least one field to apply')
       return
     }
+    if (!activeImportSessionId) {
+      toast.error('Import session missing. Please fetch the website again.')
+      return
+    }
 
     setApplying(true)
     try {
-      const updates: Record<string, string> = {}
-      const newAutoPopulated = new Set<string>()
-
-      for (const detail of detectedDetails) {
-        if (selectedDetails.has(detail.targetField)) {
-          updates[detail.targetField] = detail.value
-          newAutoPopulated.add(detail.targetField)
-        }
-      }
-
-      const res = await fetch('/api/clinic', {
-        method: 'PATCH',
+      const res = await fetch(`/api/clinic-imports/${activeImportSessionId}/approve`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({
+          approved_fields: detectedDetails.map((detail) => ({
+            fieldId: detail.id,
+            approved: detail.canApply && selectedDetails.has(detail.id),
+            approvedValue: editedDetails[detail.id] ?? detail.value,
+          })),
+        }),
       })
 
       if (!res.ok) throw new Error('Failed to apply details')
 
       const updated = await res.json()
-      setProfile(updated)
+      const newAutoPopulated = new Set<string>(
+        detectedDetails
+          .filter((detail) => detail.canApply && selectedDetails.has(detail.id))
+          .map((detail) => detail.targetField),
+      )
+
+      setProfile(updated.clinic)
       setAutoPopulatedFields((prev) => new Set([...prev, ...newAutoPopulated]))
       setPreviewDialogOpen(false)
       setDetectedDetails([])
+      setEditedDetails({})
+      setActiveImportSessionId('')
       setFetchUrl('')
+      if (Array.isArray(updated.warnings) && updated.warnings.length > 0) {
+        toast.info('Some detected fields still need structured manual review before they can be applied.')
+      }
       toast.success(`Applied ${selectedDetails.size} field${selectedDetails.size > 1 ? 's' : ''} from website`)
     } catch {
       toast.error('Failed to apply detected details')
     } finally {
       setApplying(false)
     }
-  }, [selectedDetails, detectedDetails])
+  }, [activeImportSessionId, detectedDetails, editedDetails, selectedDetails])
 
   const renderValue = (field: keyof ClinicProfile) => {
     if (field === 'isActive') {
@@ -941,7 +981,7 @@ export default function ClinicProfilePage() {
                   variant="ghost"
                   size="sm"
                   className="h-7 text-xs"
-                  onClick={() => setSelectedDetails(new Set(detectedDetails.map((d) => d.targetField)))}
+                  onClick={() => setSelectedDetails(new Set(detectedDetails.filter((d) => d.canApply).map((d) => d.id)))}
                 >
                   Select All
                 </Button>
@@ -958,20 +998,27 @@ export default function ClinicProfilePage() {
 
             {detectedDetails.map((detail) => {
               const Icon = detailIcons[detail.field] || CheckCircle2
-              const isSelected = selectedDetails.has(detail.targetField)
+              const isSelected = selectedDetails.has(detail.id)
               const currentProfileValue = String(profile[detail.targetField as keyof ClinicProfile] ?? '').trim()
+              const editedValue = editedDetails[detail.id] ?? detail.value
+              const useTextarea = editedValue.length > 80 || ['address', 'pricingNotes', 'emergencyInstructions', 'openingHours'].includes(detail.targetField)
 
               return (
                 <div
-                  key={detail.targetField}
-                  className={`flex items-start gap-3 rounded-lg border p-3 transition-colors cursor-pointer ${
-                    isSelected ? 'border-emerald-200 bg-emerald-50/30' : 'border-muted bg-muted/10 opacity-60'
+                  key={detail.id}
+                  className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
+                    !detail.canApply
+                      ? 'border-amber-200 bg-amber-50/30'
+                      : isSelected
+                        ? 'border-emerald-200 bg-emerald-50/30 cursor-pointer'
+                        : 'border-muted bg-muted/10 opacity-60 cursor-pointer'
                   }`}
-                  onClick={() => toggleDetailSelection(detail.targetField)}
+                  onClick={() => detail.canApply && toggleDetailSelection(detail.id)}
                 >
                   <Checkbox
                     checked={isSelected}
-                    onCheckedChange={() => toggleDetailSelection(detail.targetField)}
+                    disabled={!detail.canApply}
+                    onCheckedChange={() => detail.canApply && toggleDetailSelection(detail.id)}
                     className="mt-0.5"
                   />
                   <Icon className="size-4 text-emerald-600 mt-0.5 shrink-0" />
@@ -983,10 +1030,39 @@ export default function ClinicProfilePage() {
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground mt-0.5 break-words">{detail.value}</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Source: &quot;{detail.sourceSnippet}&quot;
+                    </p>
                     {currentProfileValue && (
                       <p className="text-[11px] text-amber-600 mt-1">
                         Current value: &quot;{currentProfileValue.substring(0, 80)}{currentProfileValue.length > 80 ? '...' : ''}&quot;
                       </p>
+                    )}
+                    {!detail.canApply && detail.reason && (
+                      <p className="text-[11px] text-amber-700 mt-1">{detail.reason}</p>
+                    )}
+                    {detail.canApply && isSelected && (
+                      <div className="mt-2" onClick={(event) => event.stopPropagation()}>
+                        <Label className="text-[11px] text-muted-foreground">Approved value</Label>
+                        {useTextarea ? (
+                          <Textarea
+                            rows={3}
+                            value={editedValue}
+                            onChange={(event) =>
+                              setEditedDetails((prev) => ({ ...prev, [detail.id]: event.target.value }))
+                            }
+                            className="mt-1 text-sm"
+                          />
+                        ) : (
+                          <Input
+                            value={editedValue}
+                            onChange={(event) =>
+                              setEditedDetails((prev) => ({ ...prev, [detail.id]: event.target.value }))
+                            }
+                            className="mt-1 h-8 text-sm"
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1019,7 +1095,12 @@ export default function ClinicProfilePage() {
           )}
 
           <AlertDialogFooter className="gap-2 sm:gap-0">
-            <AlertDialogCancel onClick={() => { setPreviewDialogOpen(false); setDetectedDetails([]); }}>
+            <AlertDialogCancel onClick={() => {
+              setPreviewDialogOpen(false)
+              setDetectedDetails([])
+              setEditedDetails({})
+              setActiveImportSessionId('')
+            }}>
               Cancel
             </AlertDialogCancel>
             <Button

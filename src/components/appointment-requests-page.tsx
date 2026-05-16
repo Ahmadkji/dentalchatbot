@@ -62,9 +62,11 @@ interface AppointmentRequest {
 }
 
 const statusColors: Record<string, string> = {
-  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  requested: 'bg-amber-50 text-amber-700 border-amber-200',
   confirmed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   cancelled: 'bg-red-50 text-red-700 border-red-200',
+  completed: 'bg-sky-50 text-sky-700 border-sky-200',
+  no_show: 'bg-slate-100 text-slate-700 border-slate-200',
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -196,6 +198,35 @@ export default function AppointmentRequestsPage() {
     }
   }
 
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+
+  const confirmRequest = async (request: AppointmentRequest) => {
+    setConfirmingId(request.id)
+    try {
+      const res = await fetch(`/api/appointment-requests/${request.id}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: request.preferredDate,
+          startTime: request.preferredTime?.includes(':') ? request.preferredTime.slice(0, 5) : request.preferredTime,
+        }),
+      })
+      if (res.status === 409) {
+        toast.error('That time was just taken. Please choose another time.')
+      } else if (res.ok) {
+        toast.success('Appointment confirmed')
+        fetchRequests()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to confirm appointment')
+      }
+    } catch {
+      toast.error('Failed to confirm appointment')
+    } finally {
+      setConfirmingId(null)
+    }
+  }
+
   const updateStatus = async (id: string, status: string) => {
     try {
       const res = await fetch(`/api/appointment-requests/${id}`, {
@@ -244,7 +275,7 @@ export default function AppointmentRequestsPage() {
         <Tabs value={statusFilter} onValueChange={setStatusFilter}>
           <TabsList className="h-8">
             <TabsTrigger value="all" className="text-xs px-3 h-6">All</TabsTrigger>
-            <TabsTrigger value="pending" className="text-xs px-3 h-6">Pending</TabsTrigger>
+            <TabsTrigger value="requested" className="text-xs px-3 h-6">Requested</TabsTrigger>
             <TabsTrigger value="confirmed" className="text-xs px-3 h-6">Confirmed</TabsTrigger>
             <TabsTrigger value="cancelled" className="text-xs px-3 h-6">Cancelled</TabsTrigger>
           </TabsList>
@@ -431,13 +462,14 @@ export default function AppointmentRequestsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {request.status === 'pending' && (
+                        {request.status === 'requested' && (
                           <>
                             <Button
                               variant="ghost"
                               size="sm"
                               className="h-7 w-7 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
-                              onClick={() => updateStatus(request.id, 'confirmed')}
+                              disabled={confirmingId === request.id}
+                              onClick={() => confirmRequest(request)}
                               title="Confirm"
                             >
                               <CheckCircle className="size-3.5" />
@@ -465,9 +497,9 @@ export default function AppointmentRequestsPage() {
                               View Details
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => updateStatus(request.id, 'pending')}>
+                            <DropdownMenuItem onClick={() => updateStatus(request.id, 'requested')}>
                               <span className="size-2 rounded-full bg-amber-400 mr-2" />
-                              Pending
+                              Requested
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => updateStatus(request.id, 'confirmed')}>
                               <span className="size-2 rounded-full bg-emerald-400 mr-2" />
@@ -553,7 +585,7 @@ export default function AppointmentRequestsPage() {
             </div>
           )}
           <DialogFooter>
-            {selectedRequest && selectedRequest.status === 'pending' && (
+            {selectedRequest && selectedRequest.status === 'requested' && (
               <div className="flex gap-2 w-full sm:justify-end">
                 <Button
                   variant="outline"
@@ -570,13 +602,14 @@ export default function AppointmentRequestsPage() {
                 <Button
                   size="sm"
                   className="bg-emerald-600 hover:bg-emerald-700"
+                  disabled={confirmingId === selectedRequest.id}
                   onClick={() => {
-                    updateStatus(selectedRequest.id, 'confirmed')
+                    confirmRequest(selectedRequest)
                     setDetailDialogOpen(false)
                   }}
                 >
                   <CheckCircle className="size-3.5 mr-1" />
-                  Confirm
+                  {confirmingId === selectedRequest.id ? 'Confirming...' : 'Confirm'}
                 </Button>
               </div>
             )}

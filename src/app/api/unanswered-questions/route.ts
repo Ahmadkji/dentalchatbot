@@ -1,14 +1,26 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
 
 export async function GET() {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const rows = await db.unansweredQuestion.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
+    const { data: rows, error } = await supabase
+      .from('unanswered_questions')
+      .select('*')
+      .eq('clinic_id', current.clinic.id)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+
     return NextResponse.json(rows)
   } catch (error) {
     console.error('Error fetching unanswered questions:', error)
@@ -17,24 +29,35 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
     const body = await request.json()
     const question = String(body.question || '').trim()
     if (!question) {
       return NextResponse.json({ error: 'question is required' }, { status: 400 })
     }
 
-    const created = await db.unansweredQuestion.create({
-      data: {
-        conversationId: body.conversationId ? String(body.conversationId) : null,
+    const { data: created, error } = await supabase
+      .from('unanswered_questions')
+      .insert({
+        clinic_id: current.clinic.id,
+        conversation_id: body.conversationId ? String(body.conversationId) : null,
         question,
-        sourcePage: body.sourcePage ? String(body.sourcePage) : null,
+        source_page: body.sourcePage ? String(body.sourcePage) : null,
         status: 'open',
-        answer: null,
-      },
-    })
+      })
+      .select('*')
+      .single()
+
+    if (error) throw error
 
     return NextResponse.json(created, { status: 201 })
   } catch (error) {

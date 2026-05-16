@@ -74,7 +74,7 @@ interface SourceRow {
   id: string
   title: string
   type: 'manual_text' | 'website' | 'file'
-  status: 'processing' | 'trained' | 'failed' | 'needs_refresh'
+  status: 'draft' | 'processing' | 'trained' | 'failed' | 'needs_review' | 'disabled'
   chunkCount: number
   updatedAt: string
 }
@@ -99,11 +99,12 @@ const statusStyles: Record<string, string> = {
   trained: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   processing: 'bg-sky-50 text-sky-700 border-sky-200',
   failed: 'bg-red-50 text-red-700 border-red-200',
-  needs_refresh: 'bg-amber-50 text-amber-700 border-amber-200',
+  needs_review: 'bg-amber-50 text-amber-700 border-amber-200',
+  draft: 'bg-slate-100 text-slate-700 border-slate-200',
+  disabled: 'bg-slate-100 text-slate-700 border-slate-200',
   new: 'bg-sky-50 text-sky-700 border-sky-200',
   contacted: 'bg-amber-50 text-amber-700 border-amber-200',
   booked: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  lost: 'bg-slate-100 text-slate-700 border-slate-200',
   spam: 'bg-red-50 text-red-700 border-red-200',
 }
 

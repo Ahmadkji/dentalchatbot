@@ -1,7 +1,49 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { assertSameOrigin } from '@/lib/security'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
+
+const onboardingSchema = z.object({
+  fullName: z.string().trim().min(2, 'Full name must be at least 2 characters.').max(80),
+  clinicName: z.string().trim().min(2, 'Clinic name must be at least 2 characters.').max(120),
+  country: z.string().trim().min(2, 'Country is required.').max(80),
+  city: z.string().trim().min(2, 'City is required.').max(80),
+  timezone: z.string().trim().refine((value) => {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: value })
+      return true
+    } catch {
+      return false
+    }
+  }, 'Select a valid timezone.'),
+  phone: z.string().trim().regex(/^\+[1-9]\d{7,14}$/, 'Phone must be in E.164 format, for example +923001234567.'),
+  whatsapp: z.string().trim().optional(),
+  websiteUrl: z.string().trim().optional(),
+}).superRefine((value, ctx) => {
+  if (value.whatsapp && !/^\+[1-9]\d{7,14}$/.test(value.whatsapp)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['whatsapp'],
+      message: 'WhatsApp must be in E.164 format, for example +923001234567.',
+    })
+  }
+
+  if (value.websiteUrl) {
+    try {
+      const url = new URL(value.websiteUrl)
+      if (url.protocol !== 'https:' || !url.hostname.includes('.')) {
+        throw new Error('Invalid website URL')
+      }
+    } catch {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['websiteUrl'],
+        message: 'Website URL must be a valid https:// URL.',
+      })
+    }
+  }
+})
 
 function buildResponse(body: unknown, status = 200) {
   return setPrivateNoStore(NextResponse.json(body, { status }))
@@ -33,22 +75,11 @@ export async function POST(request: Request) {
   }
 
   const payload = await request.json().catch(() => null)
-  if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) {
-    return buildResponse({ error: 'Request body is required.' }, 400)
-  }
+  const parsed = onboardingSchema.safeParse(payload)
 
-  const fullName = typeof (payload as { fullName?: string }).fullName === 'string'
-    ? (payload as { fullName?: string }).fullName.trim()
-    : ''
-  const clinicName = typeof (payload as { clinicName?: string }).clinicName === 'string'
-    ? (payload as { clinicName?: string }).clinicName.trim()
-    : ''
-  const timezone = typeof (payload as { timezone?: string }).timezone === 'string'
-    ? (payload as { timezone?: string }).timezone
-    : 'UTC'
-
-  if (!fullName) {
-    return buildResponse({ error: 'Full name is required.' }, 400)
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0]
+    return buildResponse({ error: firstIssue?.message ?? 'Request body is required.' }, 400)
   }
 
   const { cookieResponse, supabase, error } = await requireSession(request)
@@ -61,25 +92,25 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Session expired.' }, 401)
   }
 
-  const updateData: Record<string, unknown> = {
-    full_name: fullName,
-    timezone: timezone || 'UTC',
-    onboarding_completed: true,
+  const websiteUrl = parsed.data.websiteUrl
+    ? new URL(parsed.data.websiteUrl).origin
+    : null
+
+  const { data, error: rpcError } = await supabase.rpc('complete_onboarding', {
+    p_full_name: parsed.data.fullName,
+    p_clinic_name: parsed.data.clinicName,
+    p_country: parsed.data.country,
+    p_city: parsed.data.city,
+    p_timezone: parsed.data.timezone,
+    p_phone: parsed.data.phone,
+    p_whatsapp: parsed.data.whatsapp || null,
+    p_website_url: websiteUrl,
+  })
+
+  if (rpcError) {
+    return buildResponse({ error: rpcError.message || 'Failed to create clinic workspace. Please try again.' }, 400)
   }
 
-  if (clinicName) {
-    updateData.clinic_name = clinicName
-  }
-
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update(updateData)
-    .eq('id', user.id)
-
-  if (updateError) {
-    return buildResponse({ error: 'Failed to save profile. Please try again.' }, 500)
-  }
-
-  const response = buildResponse({ ok: true }, 200)
+  const response = buildResponse({ ok: true, clinicId: data?.clinic_id ?? null }, 200)
   return copyResponseCookies(cookieResponse, response)
 }

@@ -1,48 +1,65 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireOwnership } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const { status, name, phone, question, preferredContact, service, preferredDate, preferredTime, message, internalNote } = body;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const existing = await db.lead.findUnique({ where: { id } });
+    const { id } = await params
+    const body = await request.json()
+    const { status, name, phone, question, preferredContact, service, preferredDate, preferredTime, message, internalNote } = body
 
-    const ownershipError = requireOwnership(existing, user.id);
-    if (ownershipError) return ownershipError;
+    // Verify lead belongs to this clinic
+    const adminClient = createSupabaseAdminClient()
+    const { data: existing, error: findError } = await adminClient
+      .from('leads')
+      .select('id, clinic_id')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    const data: Record<string, unknown> = {};
-    if (status !== undefined) data.status = status;
-    if (name !== undefined) data.name = name;
-    if (phone !== undefined) data.phone = phone;
-    if (question !== undefined) data.question = question;
-    if (preferredContact !== undefined) data.preferredContact = preferredContact;
-    if (service !== undefined) data.service = service;
-    if (preferredDate !== undefined) data.preferredDate = preferredDate;
-    if (preferredTime !== undefined) data.preferredTime = preferredTime;
-    if (message !== undefined) data.message = message;
-    if (internalNote !== undefined) data.internalNote = internalNote;
+    if (findError) throw findError
+    if (!existing) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
 
-    const lead = await db.lead.update({
-      where: { id },
-      data,
-    });
+    const updateData: Record<string, unknown> = {}
+    if (status !== undefined) updateData.status = status
+    if (name !== undefined) updateData.name = name
+    if (phone !== undefined) updateData.phone = phone
+    if (question !== undefined) updateData.question = question
+    if (preferredContact !== undefined) updateData.preferred_contact = preferredContact
+    if (service !== undefined) updateData.service = service
+    if (preferredDate !== undefined) updateData.preferred_date = preferredDate
+    if (preferredTime !== undefined) updateData.preferred_time = preferredTime
+    if (message !== undefined) updateData.message = message
+    if (internalNote !== undefined) updateData.internal_note = internalNote
 
-    return NextResponse.json(lead);
+    const { data: lead, error } = await adminClient
+      .from('leads')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    return NextResponse.json(lead)
   } catch (error) {
-    console.error('Error updating lead:', error);
-    return NextResponse.json(
-      { error: 'Failed to update lead' },
-      { status: 500 }
-    );
+    console.error('Error updating lead:', error)
+    return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 })
   }
 }
 
@@ -50,25 +67,43 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const existing = await db.lead.findUnique({ where: { id } });
+    const { id } = await params
 
-    const ownershipError = requireOwnership(existing, user.id);
-    if (ownershipError) return ownershipError;
+    const adminClient = createSupabaseAdminClient()
 
-    await db.lead.delete({ where: { id } });
+    // Verify ownership
+    const { data: existing, error: findError } = await adminClient
+      .from('leads')
+      .select('id, clinic_id')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    return NextResponse.json({ success: true });
+    if (findError) throw findError
+    if (!existing) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const { error } = await adminClient
+      .from('leads')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+
+    return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error deleting lead:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete lead' },
-      { status: 500 }
-    );
+    console.error('Error deleting lead:', error)
+    return NextResponse.json({ error: 'Failed to delete lead' }, { status: 500 })
   }
 }

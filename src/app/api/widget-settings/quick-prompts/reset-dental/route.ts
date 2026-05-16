@@ -1,44 +1,61 @@
-import { clinicData, getDefaultClinic } from '@/lib/clinic-data'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import {
+  WIDGET_QUICK_PROMPT_INTENTS,
+  type QuickPromptRow,
+  mapWidgetQuickPromptRow,
+} from '@/lib/widget/quick-prompts'
 
-const dentalPrompts = [
-  { label: 'Book Appointment', message: "I'd like to book an appointment", actionType: 'appointment', actionValue: null },
-  { label: 'Tooth Pain', message: 'I have tooth pain. What should I do?', actionType: 'message', actionValue: null },
-  { label: 'Braces', message: 'Tell me about braces and aligners.', actionType: 'message', actionValue: null },
-  { label: 'Root Canal', message: 'Tell me about root canal treatment.', actionType: 'message', actionValue: null },
-  { label: 'Teeth Cleaning', message: 'What is included in dental cleaning?', actionType: 'message', actionValue: null },
-  { label: 'Clinic Location', message: 'Where is the clinic located?', actionType: 'message', actionValue: null },
-  { label: 'WhatsApp Clinic', message: 'How can I contact you on WhatsApp?', actionType: 'link', actionValue: 'https://wa.me/15551002000' },
-  { label: 'Consultation Fee', message: 'What is the consultation fee?', actionType: 'message', actionValue: null },
+const dentalPrompts: Array<{ label: string; intent: string }> = [
+  { label: 'Book Appointment', intent: WIDGET_QUICK_PROMPT_INTENTS[0] },
+  { label: 'Clinic Hours', intent: WIDGET_QUICK_PROMPT_INTENTS[1] },
+  { label: 'Services & Fees', intent: WIDGET_QUICK_PROMPT_INTENTS[2] },
+  { label: 'Location', intent: WIDGET_QUICK_PROMPT_INTENTS[3] },
+  { label: 'Talk on WhatsApp', intent: WIDGET_QUICK_PROMPT_INTENTS[4] },
+  { label: 'Emergency Help', intent: WIDGET_QUICK_PROMPT_INTENTS[5] },
 ]
 
 export async function POST() {
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const clinic = await getDefaultClinic()
+    const { clinic } = await getCurrentClinic(supabase, user)
     if (!clinic) {
-      return NextResponse.json({ error: 'Clinic not found' }, { status: 404 })
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const existing = await clinicData.quickPrompt.findMany({ where: { clinicId: clinic.id } })
-    await Promise.all(existing.map((prompt) => clinicData.quickPrompt.delete({ where: { id: prompt.id } })))
+    const { error: deleteError } = await supabase
+      .from('quick_prompts')
+      .delete()
+      .eq('clinic_id', clinic.id)
 
-    const created = await Promise.all(
-      dentalPrompts.map((prompt, index) =>
-        clinicData.quickPrompt.create({
-          data: {
-            clinicId: clinic.id,
-            label: prompt.label,
-            message: prompt.message,
-            actionType: prompt.actionType as 'message' | 'appointment' | 'link',
-            actionValue: prompt.actionValue,
-            sortOrder: index + 1,
-            isActive: true,
-          },
-        })
-      )
+    if (deleteError) {
+      return NextResponse.json({ error: 'Failed to reset prompts' }, { status: 400 })
+    }
+
+    const { data: created, error: insertError } = await supabase
+      .from('quick_prompts')
+      .insert(dentalPrompts.map((prompt, index) => ({
+        clinic_id: clinic.id,
+        label: prompt.label,
+        intent: prompt.intent,
+        sort_order: index + 1,
+        is_active: true,
+      })))
+      .select('id,clinic_id,label,intent,sort_order,is_active,created_at,updated_at')
+
+    if (insertError) {
+      return NextResponse.json({ error: 'Failed to reset prompts' }, { status: 400 })
+    }
+
+    const promptOptions = { whatsapp: clinic.whatsapp || null }
+
+    return NextResponse.json(
+      (created as QuickPromptRow[]).map((row) => mapWidgetQuickPromptRow(row, promptOptions))
     )
-
-    return NextResponse.json(created)
   } catch (error) {
     console.error('Error resetting dental prompts:', error)
     return NextResponse.json({ error: 'Failed to reset prompts' }, { status: 500 })

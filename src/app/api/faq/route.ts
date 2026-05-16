@@ -1,61 +1,73 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { createFaqEntry, listFaqEntriesForClinic } from '@/lib/knowledge/faq'
 
 export async function GET(request: NextRequest) {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const activeOnly = searchParams.get('active');
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const where: Record<string, unknown> = {};
-    if (activeOnly === 'true') where.isActive = true;
+    const activeOnly = request.nextUrl.searchParams.get('active') === 'true'
+    const faqs = await listFaqEntriesForClinic(supabase, current.clinic.id, {
+      activeOnly,
+    })
 
-    const faqs = await db.fAQ.findMany({
-      where,
-      orderBy: { order: 'asc' },
-    });
-
-    return NextResponse.json(faqs);
+    return NextResponse.json(faqs)
   } catch (error) {
-    console.error('Error fetching FAQs:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch FAQs' },
-      { status: 500 }
-    );
+    console.error('Error fetching FAQs:', error)
+    return NextResponse.json({ error: 'Failed to fetch FAQs' }, { status: 500 })
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
-  try {
-    const body = await request.json();
-    const { question, answer, order, isActive } = body;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!question || !answer) {
-      return NextResponse.json(
-        { error: 'question and answer are required' },
-        { status: 400 }
-      );
+  try {
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const faq = await db.fAQ.create({
-      data: {
-        question,
-        answer,
-        order: order || 0,
-        isActive: isActive !== undefined ? isActive : true,
-      },
-    });
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
+    }
 
-    return NextResponse.json(faq, { status: 201 });
+    const body = await request.json().catch(() => null)
+    const question = String(body?.question ?? '').trim()
+    const answer = String(body?.answer ?? '').trim()
+    const category = body?.category ? String(body.category).trim() : null
+    const order = Number(body?.order ?? 0)
+    const isActive = body?.isActive !== undefined ? Boolean(body.isActive) : true
+
+    if (!question || !answer) {
+      return NextResponse.json({ error: 'question and answer are required' }, { status: 400 })
+    }
+
+    const faq = await createFaqEntry(supabase, {
+      clinicId: current.clinic.id,
+      question,
+      answer,
+      category,
+      sortOrder: order > 0 ? order : 1,
+      isActive,
+      createdBy: user.id,
+    })
+
+    return NextResponse.json(faq, { status: 201 })
   } catch (error) {
-    console.error('Error creating FAQ:', error);
+    console.error('Error creating FAQ:', error)
     return NextResponse.json(
-      { error: 'Failed to create FAQ' },
-      { status: 500 }
-    );
+      { error: error instanceof Error ? error.message : 'Failed to create FAQ' },
+      { status: 500 },
+    )
   }
 }

@@ -5,10 +5,52 @@
   var script = document.currentScript;
   if (!script) return;
 
-  var clinicId = script.getAttribute('data-clinic-id') || '';
+  var clinicSlug = script.getAttribute('data-clinic-slug') || '';
+  var oldClinicId = script.getAttribute('data-clinic-id') || ''; // Legacy support
   var origin = new URL(script.src, window.location.href).origin;
-  var iframeSrc = origin + '/widget-frame?clinicId=' + encodeURIComponent(clinicId);
-  var storageKey = 'clinic_widget_auto_open_seen_' + (clinicId || 'default');
+
+  // ── Legacy embed warning ────────────────────────────────────────
+  // If only the old data-clinic-id attribute is present (no data-clinic-slug),
+  // show a setup warning instead of trying to keep the old public flow alive.
+  if (!clinicSlug && oldClinicId) {
+    console.warn('[clinic-widget] This embed code is outdated. Please regenerate the embed snippet from your clinic dashboard to get the new slug-based code.');
+    var warningDiv = document.createElement('div');
+    warningDiv.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:8px;font:13px system-ui,sans-serif;z-index:2147483000;max-width:300px;';
+    warningDiv.textContent = 'Chat widget setup is incomplete. Please contact the clinic to refresh the embed code.';
+    document.body.appendChild(warningDiv);
+    return;
+  }
+
+  if (!clinicSlug) return;
+
+  var storageKey = 'clinic_widget_auto_open_seen_' + clinicSlug;
+  var sessionKey = 'clinic_widget_session_v2_' + clinicSlug;
+  var visitorIdKey = 'clinic_widget_visitor_' + clinicSlug;
+
+  function createVisitorId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return 'v_' + window.crypto.randomUUID();
+      }
+    } catch (e) {}
+    return 'v_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  // ── Visitor ID (durable per slug per browser) ──────────────────
+  var visitorId = '';
+  try {
+    visitorId = window.localStorage.getItem(visitorIdKey) || '';
+    if (!visitorId) {
+      visitorId = createVisitorId();
+      window.localStorage.setItem(visitorIdKey, visitorId);
+    }
+  } catch (e) {
+    visitorId = createVisitorId();
+  }
+
+  var iframeSrc = ''; // Will be set after config bootstrap
+  var widgetAccessToken = ''; // Will be set after config bootstrap
+  var widgetConfig = null;
 
   var defaults = {
     primaryColor: '#059669',
@@ -22,6 +64,28 @@
 
   var settings = defaults;
   var isOpen = false;
+
+  function logWidgetEvent(eventType, metadata) {
+    if (!widgetAccessToken) return;
+    var session = readSession();
+
+    fetch(origin + '/api/analytics/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'widget',
+        eventType: eventType,
+        clinicSlug: clinicSlug,
+        widgetAccessToken: widgetAccessToken,
+        visitorId: visitorId,
+        conversationId: session ? session.conversationId : null,
+        publicSessionToken: session ? session.publicSessionToken : null,
+        metadata: metadata || null
+      })
+    }).catch(function () {
+      // Analytics should never block widget UX.
+    });
+  }
 
   function getSize(size) {
     if (size === 'compact') return { width: '340px', height: '560px' };
@@ -145,11 +209,14 @@
   }
 
   launcher.addEventListener('click', function () {
-    setOpen(!isOpen);
+    var nextOpen = !isOpen;
+    setOpen(nextOpen);
+    logWidgetEvent(nextOpen ? 'widget_opened' : 'widget_closed', { source: 'launcher' });
   });
 
   tooltip.addEventListener('click', function () {
     setOpen(true);
+    logWidgetEvent('widget_opened', { source: 'tooltip' });
   });
 
   document.addEventListener('keydown', function (event) {
@@ -158,9 +225,156 @@
     }
   });
 
-  document.body.appendChild(launcher);
-  document.body.appendChild(iframe);
-  document.body.appendChild(tooltip);
+  // ── Session storage (host page is the durable owner) ──────────
+
+  function readSession() {
+    try {
+      var raw = window.localStorage.getItem(sessionKey);
+      if (!raw) return null;
+      var session = JSON.parse(raw);
+      if (!session || !session.conversationId || !session.publicSessionToken) return null;
+      return session;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeSession(session) {
+    try {
+      window.localStorage.setItem(sessionKey, JSON.stringify(session));
+    } catch (e) {
+      // localStorage unavailable — session lives only in memory for this tab
+    }
+  }
+
+  function clearSession() {
+    try {
+      window.localStorage.removeItem(sessionKey);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // ── postMessage handler ───────────────────────────────────────
+
+  window.addEventListener('message', function (event) {
+    // Security: verify origin and source
+    if (event.origin !== origin) return;
+    if (!iframe.contentWindow || event.source !== iframe.contentWindow) return;
+    if (!event.data || typeof event.data.type !== 'string') return;
+
+    if (event.data.type === 'clinic_widget:ready') {
+      // Iframe is ready — hydrate it with stored session
+      var session = readSession();
+      iframe.contentWindow.postMessage({
+        type: 'clinic_widget:hydrate',
+        payload: {
+          conversationId: session ? session.conversationId : null,
+          publicSessionToken: session ? session.publicSessionToken : null,
+          clinicSlug: clinicSlug,
+          widgetAccessToken: widgetAccessToken,
+          visitorId: visitorId,
+          widgetConfig: widgetConfig
+        }
+      }, origin);
+      return;
+    }
+
+    if (event.data.type === 'clinic_widget:state_updated') {
+      var payload = event.data.payload;
+      if (!payload || !payload.conversationId || !payload.publicSessionToken) return;
+
+      // Only store if newer than current
+      var current = readSession();
+      if (current && current.updatedAt && payload.updatedAt) {
+        if (new Date(payload.updatedAt).getTime() <= new Date(current.updatedAt).getTime()) return;
+      }
+
+      writeSession({
+        conversationId: payload.conversationId,
+        publicSessionToken: payload.publicSessionToken,
+        clinicSlug: payload.clinicSlug || clinicSlug,
+        updatedAt: payload.updatedAt,
+        version: 2
+      });
+      return;
+    }
+
+    if (event.data.type === 'clinic_widget:start_new_session') {
+      clearSession();
+      iframe.contentWindow.postMessage({
+        type: 'clinic_widget:clear_session',
+        payload: { clinicSlug: clinicSlug }
+      }, origin);
+      return;
+    }
+
+    if (event.data.type === 'clinic_widget:close_requested') {
+      setOpen(false);
+      logWidgetEvent('widget_closed', { source: 'iframe_header' });
+      return;
+    }
+
+    // ── Token refresh: iframe reports token expired ──────────────
+    if (event.data.type === 'clinic_widget:token_expired') {
+      // Re-bootstrap: fetch fresh config with a new token
+      fetch(origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug))
+        .then(function (response) {
+          if (!response.ok) return Promise.reject(new Error('Refresh failed: ' + response.status));
+          return response.json();
+        })
+        .then(function (config) {
+          widgetAccessToken = config.widgetAccessToken || '';
+          widgetConfig = config;
+          // Send the fresh token back to the iframe
+          if (iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+              type: 'clinic_widget:token_refresh',
+              payload: {
+                widgetAccessToken: widgetAccessToken,
+                widgetConfig: widgetConfig
+              }
+            }, origin);
+          }
+        })
+        .catch(function (err) {
+          console.error('[clinic-widget] Token refresh failed:', err);
+          // Tell iframe the refresh failed so it can show an error
+          if (iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+              type: 'clinic_widget:token_refresh',
+              payload: { widgetAccessToken: '' }
+            }, origin);
+          }
+        });
+      return;
+    }
+  });
+
+  // ── Config bootstrap: fetch public config, then set up UI ──────
+
+  fetch(origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug))
+    .then(function (response) {
+      if (!response.ok) return Promise.reject(new Error('Config fetch failed: ' + response.status));
+      return response.json();
+    })
+    .then(function (config) {
+      widgetAccessToken = config.widgetAccessToken || '';
+      widgetConfig = config;
+      iframeSrc = origin + '/widget-frame?clinicSlug=' + encodeURIComponent(clinicSlug) + '&mode=embedded&handoff=1';
+      iframe.src = iframeSrc;
+      // Only add DOM elements after successful bootstrap
+      document.body.appendChild(launcher);
+      document.body.appendChild(iframe);
+      document.body.appendChild(tooltip);
+      applySettings(config);
+      logWidgetEvent('widget_loaded', { source: 'bootstrap' });
+    })
+    .catch(function (err) {
+      console.error('[clinic-widget] Failed to load widget config:', err);
+      // Don't add any DOM — no launcher, no iframe, no tooltip.
+      // The widget is simply not available for this clinic/domain.
+    });
 
   function applySettings(nextSettings) {
     settings = Object.assign({}, defaults, nextSettings || {});
@@ -193,23 +407,29 @@
       }, 6500);
     }
 
-    if (settings.autoOpenDelay !== 'off' && !window.localStorage.getItem(storageKey)) {
-      var delay = settings.autoOpenDelay === '10s' ? 10000 : 5000;
-      window.setTimeout(function () {
-        setOpen(true);
-        window.localStorage.setItem(storageKey, 'true');
-      }, delay);
+    if (settings.autoOpenDelay !== 'off') {
+      var shouldAutoOpen = false;
+
+      try {
+        shouldAutoOpen = !window.localStorage.getItem(storageKey);
+      } catch (e) {
+        shouldAutoOpen = false;
+      }
+
+      if (shouldAutoOpen) {
+        var delay = settings.autoOpenDelay === '10s' ? 10000 : 5000;
+        window.setTimeout(function () {
+          setOpen(true);
+          try {
+            window.localStorage.setItem(storageKey, 'true');
+          } catch (e) {
+            // ignore
+          }
+        }, delay);
+      }
     }
   }
 
-  fetch(origin + '/api/widget-settings')
-    .then(function (response) {
-      return response.ok ? response.json() : defaults;
-    })
-    .then(function (data) {
-      applySettings(data);
-    })
-    .catch(function () {
-      applySettings(defaults);
-    });
+  // Remove old fetch that hit /api/widget-settings directly.
+  // Config is now loaded via bootstrap in the .then chain above.
 })();

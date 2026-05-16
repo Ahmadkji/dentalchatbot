@@ -87,17 +87,28 @@ interface Service {
   isActive: boolean
 }
 
+interface ClinicHour {
+  day_of_week: number
+  day_name: string
+  is_open: boolean
+  open_time: string | null
+  close_time: string | null
+  break_start_time: string | null
+  break_end_time: string | null
+  notes: string | null
+}
+
 const DEFAULT_SETTINGS: ClinicSettings = {
-  clinic_name: 'BrightSmile Dental Clinic',
-  clinic_address: '123 Smile Avenue, Suite 200, Springfield, IL 62704',
-  clinic_phone: '(555) 100-2000',
-  clinic_hours: 'Mon-Fri: 8am-6pm, Sat: 9am-2pm',
-  whatsapp_number: '15551002000',
-  emergency_phone: '(555) 100-2001',
-  parking_info: 'Free parking in building garage. Enter from Elm Street, validated for 2 hours.',
-  google_maps_url: 'https://maps.google.com/?q=123+Smile+Avenue+Springfield+IL',
-  bot_name: 'BrightSmile AI',
-  bot_welcome_message: "Hello! I'm BrightSmile AI, your website assistant for appointments, treatments, and clinic details. How can I help?",
+  clinic_name: 'Your dental clinic',
+  clinic_address: '',
+  clinic_phone: '',
+  clinic_hours: '',
+  whatsapp_number: '',
+  emergency_phone: '',
+  parking_info: '',
+  google_maps_url: '',
+  bot_name: 'Dental Assistant',
+  bot_welcome_message: 'Hi! I can help with clinic hours, location, services, fees, and appointment requests.',
   bot_primary_color: '#059669',
   after_hours_message: "We're currently closed. Leave a message and we'll respond when we open.",
   input_placeholder: 'Ask about treatments, pricing, timings, or appointments...',
@@ -105,27 +116,50 @@ const DEFAULT_SETTINGS: ClinicSettings = {
   cta_link: '',
 }
 
-function isAfterHours(hours: string): boolean {
-  const now = new Date()
-  const day = now.getDay()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
-  const currentTime = hour * 60 + minute
+function minutesFromTime(value: string | null) {
+  if (!value) return null
+  const [hour, minute] = value.split(':').map(Number)
+  return hour * 60 + minute
+}
 
-  // Sunday is always closed
-  if (day === 0) return true
+function isClinicOpenNow(hours: ClinicHour[], timezone: string): boolean {
+  if (hours.length === 0) return false
 
-  // Saturday: 9am-2pm
-  if (day === 6) {
-    const open = 9 * 60
-    const close = 14 * 60
-    return currentTime < open || currentTime >= close
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+
+  const parts = formatter.formatToParts(new Date())
+  const weekday = parts.find((part) => part.type === 'weekday')?.value
+  const hour = parts.find((part) => part.type === 'hour')?.value
+  const minute = parts.find((part) => part.type === 'minute')?.value
+  const dayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday || '')
+
+  if (dayIndex === -1) return false
+
+  const row = hours.find((item) => item.day_of_week === dayIndex)
+  if (!row?.is_open) return false
+
+  const currentTime = Number(hour) * 60 + Number(minute)
+  const open = minutesFromTime(row.open_time)
+  const close = minutesFromTime(row.close_time)
+
+  if (open === null || close === null || currentTime < open || currentTime >= close) {
+    return false
   }
 
-  // Weekdays: 8am-6pm
-  const open = 8 * 60
-  const close = 18 * 60
-  return currentTime < open || currentTime >= close
+  const breakStart = minutesFromTime(row.break_start_time)
+  const breakEnd = minutesFromTime(row.break_end_time)
+
+  if (breakStart !== null && breakEnd !== null && currentTime >= breakStart && currentTime < breakEnd) {
+    return false
+  }
+
+  return true
 }
 
 function WhatsAppButton({ number, onTrack }: { number: string; onTrack?: () => void }) {
@@ -381,21 +415,12 @@ export default function ChatPage() {
   useEffect(() => {
     async function fetchSettings() {
       try {
-        const [settingsRes, clinicRes, widgetRes, promptsRes] = await Promise.all([
-          fetch('/api/settings'),
+        const [clinicRes, hoursRes, widgetRes, promptsRes] = await Promise.all([
           fetch('/api/clinic'),
+          fetch('/api/clinic-hours'),
           fetch('/api/widget-settings'),
           fetch('/api/widget-settings/quick-prompts'),
         ])
-
-        const settingsMap: Record<string, string> = {}
-        if (settingsRes.ok) {
-          const data = await settingsRes.json()
-          const settingsList = data.settings || []
-          settingsList.forEach((s: { key: string; value: string }) => {
-            settingsMap[s.key] = s.value
-          })
-        }
 
         let clinic: Partial<ClinicSettings> & {
           name?: string
@@ -404,11 +429,18 @@ export default function ChatPage() {
           whatsappNumber?: string
           openingHours?: string
           emergencyInstructions?: string
+          websiteUrl?: string
+          mapLink?: string
+          timezone?: string
         } = {}
 
         if (clinicRes.ok) {
           clinic = await clinicRes.json()
         }
+
+        const clinicHours: ClinicHour[] = hoursRes.ok
+          ? await hoursRes.json()
+          : []
 
         let widgetSettings: Partial<ClinicSettings> & {
           botName?: string
@@ -416,6 +448,7 @@ export default function ChatPage() {
           inputPlaceholder?: string
           ctaText?: string
           ctaLink?: string
+          primaryColor?: string
         } = {}
 
         if (widgetRes.ok) {
@@ -428,28 +461,28 @@ export default function ChatPage() {
         }
 
         const mergedSettings = {
-          clinic_name: clinic.clinic_name || clinic.name || settingsMap.clinic_name || DEFAULT_SETTINGS.clinic_name,
-          clinic_address: clinic.clinic_address || clinic.address || settingsMap.clinic_address || DEFAULT_SETTINGS.clinic_address,
-          clinic_phone: clinic.clinic_phone || clinic.primaryPhone || settingsMap.clinic_phone || DEFAULT_SETTINGS.clinic_phone,
-          clinic_hours: clinic.clinic_hours || clinic.openingHours || settingsMap.clinic_hours || DEFAULT_SETTINGS.clinic_hours,
-          whatsapp_number: clinic.whatsapp_number || clinic.whatsappNumber || settingsMap.whatsapp_number || DEFAULT_SETTINGS.whatsapp_number,
-          emergency_phone: settingsMap.emergency_phone || DEFAULT_SETTINGS.emergency_phone,
-          parking_info: settingsMap.parking_info || DEFAULT_SETTINGS.parking_info,
-          google_maps_url: settingsMap.google_maps_url || DEFAULT_SETTINGS.google_maps_url,
-          bot_name: widgetSettings.botName || settingsMap.bot_name || DEFAULT_SETTINGS.bot_name,
-          bot_welcome_message: widgetSettings.welcomeMessage || settingsMap.bot_welcome_message || DEFAULT_SETTINGS.bot_welcome_message,
-          bot_primary_color: settingsMap.bot_primary_color || DEFAULT_SETTINGS.bot_primary_color,
-          after_hours_message: settingsMap.after_hours_message || clinic.emergencyInstructions || DEFAULT_SETTINGS.after_hours_message,
+          clinic_name: clinic.clinic_name || clinic.name || DEFAULT_SETTINGS.clinic_name,
+          clinic_address: clinic.clinic_address || clinic.address || DEFAULT_SETTINGS.clinic_address,
+          clinic_phone: clinic.clinic_phone || clinic.primaryPhone || DEFAULT_SETTINGS.clinic_phone,
+          clinic_hours: clinic.clinic_hours || clinic.openingHours || DEFAULT_SETTINGS.clinic_hours,
+          whatsapp_number: clinic.whatsapp_number || clinic.whatsappNumber || DEFAULT_SETTINGS.whatsapp_number,
+          emergency_phone: clinic.clinic_phone || clinic.primaryPhone || DEFAULT_SETTINGS.emergency_phone,
+          parking_info: DEFAULT_SETTINGS.parking_info,
+          google_maps_url: clinic.mapLink || DEFAULT_SETTINGS.google_maps_url,
+          bot_name: widgetSettings.botName || DEFAULT_SETTINGS.bot_name,
+          bot_welcome_message: widgetSettings.welcomeMessage || DEFAULT_SETTINGS.bot_welcome_message,
+          bot_primary_color: widgetSettings.primaryColor || DEFAULT_SETTINGS.bot_primary_color,
+          after_hours_message: clinic.emergencyInstructions || DEFAULT_SETTINGS.after_hours_message,
           input_placeholder: widgetSettings.inputPlaceholder || DEFAULT_SETTINGS.input_placeholder,
           cta_text: widgetSettings.ctaText || DEFAULT_SETTINGS.cta_text,
           cta_link: widgetSettings.ctaLink || DEFAULT_SETTINGS.cta_link,
         }
 
         setSettings(mergedSettings)
-        setAfterHours(isAfterHours(mergedSettings.clinic_hours))
+        setAfterHours(!isClinicOpenNow(clinicHours, clinic.timezone || 'Asia/Karachi'))
       } catch {
         // Use defaults
-        setAfterHours(isAfterHours(DEFAULT_SETTINGS.clinic_hours))
+        setAfterHours(false)
       }
     }
     fetchSettings()
@@ -571,17 +604,15 @@ export default function ChatPage() {
     setMessages([])
   }
 
-  const quickReplies = quickPrompts.length > 0
+  const quickReplies: QuickPrompt[] = quickPrompts.length > 0
     ? quickPrompts
     : [
-        { id: 'default-1', label: 'Book Appointment', message: "I'd like to book an appointment", actionType: 'appointment', actionValue: null, isActive: true },
-        { id: 'default-2', label: 'Tooth Pain', message: 'I have tooth pain. What should I do?', actionType: 'message', actionValue: null, isActive: true },
-        { id: 'default-3', label: 'Braces', message: 'Tell me about braces and aligners.', actionType: 'message', actionValue: null, isActive: true },
-        { id: 'default-4', label: 'Root Canal', message: 'Tell me about root canal treatment.', actionType: 'message', actionValue: null, isActive: true },
-        { id: 'default-5', label: 'Teeth Cleaning', message: 'What is included in dental cleaning?', actionType: 'message', actionValue: null, isActive: true },
-        { id: 'default-6', label: 'Clinic Location', message: 'Where is the clinic located?', actionType: 'message', actionValue: null, isActive: true },
-        { id: 'default-7', label: 'WhatsApp Clinic', message: 'How can I contact you on WhatsApp?', actionType: 'link', actionValue: settings.cta_link || null, isActive: true },
-        { id: 'default-8', label: 'Consultation Fee', message: 'What is the consultation fee?', actionType: 'message', actionValue: null, isActive: true },
+        { id: 'default-1', label: 'Book Appointment', message: "I'd like to book an appointment", actionType: 'appointment' as const, actionValue: null, isActive: true },
+        { id: 'default-2', label: 'Clinic Hours', message: 'What are your clinic hours?', actionType: 'message' as const, actionValue: null, isActive: true },
+        { id: 'default-3', label: 'Services & Fees', message: 'Can you tell me about services and fees?', actionType: 'message' as const, actionValue: null, isActive: true },
+        { id: 'default-4', label: 'Location', message: 'Where is the clinic located?', actionType: 'message' as const, actionValue: null, isActive: true },
+        { id: 'default-5', label: 'Talk on WhatsApp', message: 'I want to talk on WhatsApp', actionType: 'link' as const, actionValue: settings.whatsapp_number ? `https://wa.me/${settings.whatsapp_number.replace(/^\+/, '')}` : null, isActive: true },
+        { id: 'default-6', label: 'Emergency Help', message: 'I need emergency dental help', actionType: 'message' as const, actionValue: null, isActive: true },
       ]
 
   const quickActionButtons = quickReplies.slice(0, 5)
@@ -616,39 +647,45 @@ export default function ChatPage() {
         appointmentForm.wantsConsultation ? `Consultation intent: ${appointmentForm.wantsConsultation}` : null,
       ].filter(Boolean).join(' | ')
 
-      const [leadRes, requestRes] = await Promise.all([
-        fetch('/api/leads', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: appointmentForm.name,
-            phone: appointmentForm.phone,
-            question: reason || 'Appointment request from chat widget',
-            service: appointmentForm.service || null,
-            preferredDate: appointmentForm.preferredDate,
-            preferredTime: appointmentForm.preferredTime,
-            message: appointmentForm.message || null,
-            internalNote: qualificationNotes || null,
-            preferredContact: 'phone',
-            source: 'chatbot',
-          }),
+      const leadRes = await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: activeConvId || undefined,
+          name: appointmentForm.name,
+          phone: appointmentForm.phone,
+          question: reason || 'Appointment request from chat widget',
+          service: appointmentForm.service || null,
+          preferredDate: appointmentForm.preferredDate,
+          preferredTime: appointmentForm.preferredTime,
+          message: appointmentForm.message || null,
+          internalNote: qualificationNotes || null,
+          preferredContact: 'phone',
+          source: 'chatbot',
         }),
-        fetch('/api/appointment-requests', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: appointmentForm.name,
-            phone: appointmentForm.phone,
-            preferredDate: appointmentForm.preferredDate,
-            preferredTime: appointmentForm.preferredTime,
-            reason,
-            preferredDoctor: appointmentForm.preferredDoctor || null,
-            source: 'chatbot',
-          }),
-        }),
-      ])
+      })
 
-      if (!leadRes.ok || !requestRes.ok) throw new Error('Failed to create appointment request')
+      if (!leadRes.ok) throw new Error('Failed to create lead')
+
+      const lead = await leadRes.json()
+
+      const requestRes = await fetch('/api/appointment-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: activeConvId || undefined,
+          leadId: lead?.id || undefined,
+          name: appointmentForm.name,
+          phone: appointmentForm.phone,
+          preferredDate: appointmentForm.preferredDate,
+          preferredTime: appointmentForm.preferredTime,
+          reason,
+          preferredDoctor: appointmentForm.preferredDoctor || null,
+          source: 'chatbot',
+        }),
+      })
+
+      if (!requestRes.ok) throw new Error('Failed to create appointment request')
 
       const confirmationMessage = `I want to request an appointment. Name: ${appointmentForm.name}. Phone: ${appointmentForm.phone}. Service: ${appointmentForm.service || 'Not specified'}. Preferred date: ${appointmentForm.preferredDate}. Preferred time: ${appointmentForm.preferredTime}. Notes: ${appointmentForm.message || 'None'}.`
 
@@ -666,7 +703,7 @@ export default function ChatPage() {
         message: '',
       })
       void trackEvent('appointment_request', appointmentForm.service || undefined)
-      toast.success('Appointment request captured')
+      toast.success('Appointment request submitted - the clinic will confirm')
       void handleSend(confirmationMessage)
     } catch {
       toast.error('Failed to capture appointment request')
@@ -675,7 +712,7 @@ export default function ChatPage() {
     }
   }
 
-  const botName = settings.bot_name || 'BrightSmile AI'
+  const botName = settings.bot_name || 'Dental Assistant'
 
   const askAboutService = (service: Service) => {
     void handleSend(`Tell me more about ${service.name}, including price and preparation instructions.`)

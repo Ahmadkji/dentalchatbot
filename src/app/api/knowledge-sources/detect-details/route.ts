@@ -1,6 +1,7 @@
-import { clinicData } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { getKnowledgeSourceForClinic } from '@/lib/knowledge/sources'
 
 interface DetectedDetail {
   field: string
@@ -21,7 +22,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
   const lower = content.toLowerCase()
   const details: DetectedDetail[] = []
 
-  // Phone detection
   const phone = extractPattern(content, [
     /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/,
     /\+\d{1,3}\d{6,14}/,
@@ -30,7 +30,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'phone', label: 'Phone', value: phone, confidence: 'high' })
   }
 
-  // WhatsApp detection
   const whatsapp = extractPattern(content, [
     /whatsapp[:\s]*\+?\d[\d\s-]{8,}/i,
     /\+1\d{10}/,
@@ -39,7 +38,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'whatsapp', label: 'WhatsApp', value: whatsapp.replace(/whatsapp[:\s]*/i, '').trim(), confidence: 'high' })
   }
 
-  // Address detection
   const addressPatterns = [
     /address[:\s]*.{10,80}(?:\d{5,6})?/i,
     /\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr)[\w\s,]+(?:\d{5,6})?/i,
@@ -49,7 +47,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'address', label: 'Address', value: address.replace(/^address[:\s]*/i, '').trim(), confidence: 'medium' })
   }
 
-  // Opening hours detection
   const hoursPatterns = [
     /(?:hours?|timings?|open)[:\s]*.{10,60}(?:pm|am|noon|midnight)/i,
     /(?:mon|tue|wed|thu|fri|sat|sun)[\w\s,-]*(?:pm|am)/i,
@@ -59,7 +56,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'opening_hours', label: 'Opening Hours', value: hours.replace(/^(?:hours?|timings?|open)[:\s]*/i, '').trim(), confidence: 'medium' })
   }
 
-  // Services detection
   const serviceKeywords = [
     'root canal',
     'braces',
@@ -79,13 +75,12 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     'consultation',
     'checkup',
   ]
-  const foundServices = serviceKeywords.filter((s) => lower.includes(s))
+  const foundServices = serviceKeywords.filter((service) => lower.includes(service))
   if (foundServices.length > 0) {
-    const unique = [...new Set(foundServices.map((s) => s.charAt(0).toUpperCase() + s.slice(1)))]
+    const unique = [...new Set(foundServices.map((service) => service.charAt(0).toUpperCase() + service.slice(1)))]
     details.push({ field: 'services', label: 'Services', value: unique.join(', '), confidence: 'high' })
   }
 
-  // Pricing detection
   const pricingPatterns = [
     /(?:price|pricing|fee|cost|rs\.|₹|\$)[\s\S]{0,80}(?:rs\.|₹|\$|consultation|treatment)/i,
     /(?:consultation|treatment)[\s\S]{0,40}(?:rs\.|₹|\$)\s*[\d,]+/i,
@@ -95,7 +90,6 @@ function detectClinicDetails(content: string): DetectedDetail[] {
     details.push({ field: 'pricing', label: 'Pricing', value: pricing.trim().substring(0, 120), confidence: 'medium' })
   }
 
-  // Emergency detection
   if (lower.includes('emergency')) {
     const emergencyPatterns = [
       /emergency[\s\S]{0,60}(?:\d{3}[-.\s]?){2}\d{4}/i,
@@ -112,17 +106,24 @@ function detectClinicDetails(content: string): DetectedDetail[] {
 }
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const body = await request.json()
-    const { sourceId } = body
+    const { clinic } = await getCurrentClinic(supabase, user)
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
+    const body = await request.json().catch(() => null)
+    const sourceId = String(body?.sourceId ?? '')
 
     if (!sourceId) {
       return NextResponse.json({ error: 'sourceId is required' }, { status: 400 })
     }
 
-    const source = await clinicData.knowledgeSource.findUnique({ where: { id: sourceId } })
+    const source = await getKnowledgeSourceForClinic(supabase, clinic.id, sourceId)
     if (!source) {
       return NextResponse.json({ error: 'Knowledge source not found' }, { status: 404 })
     }
@@ -131,8 +132,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ details: [] })
     }
 
-    const details = detectClinicDetails(source.content)
-    return NextResponse.json({ details })
+    return NextResponse.json({ details: detectClinicDetails(source.content) })
   } catch (error) {
     console.error('Error detecting details:', error)
     return NextResponse.json({ error: 'Failed to detect clinic details' }, { status: 500 })

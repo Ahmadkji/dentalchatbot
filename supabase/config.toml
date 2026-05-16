@@ -1,0 +1,2 @@
+[functions.knowledge-job-dispatcher]
+verify_jwt = false

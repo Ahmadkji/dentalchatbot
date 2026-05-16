@@ -1,68 +1,59 @@
-import { createKnowledgeSource, clinicData, getDefaultClinic, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
-import { importSitemapContent } from '@/lib/knowledge-import'
-import { NextRequest, NextResponse } from 'next/server'
+import { normalizeKnowledgeImportUrl } from '@/lib/knowledge-import'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
 
-const MAX_SITEMAP_PAGES = 20
+export const maxDuration = 60
+
+const MAX_SITEMAP_PAGES = 10
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const clinic = await getDefaultClinic()
-    if (!clinic) {
-      return NextResponse.json({ error: 'Clinic not found' }, { status: 404 })
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const body = await request.json()
-    const sitemapUrl = String(body.sitemapUrl || '').trim()
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
+    }
+
+    const body = await request.json().catch(() => null)
+    const sitemapUrl = String(body?.sitemapUrl ?? '').trim()
     if (!sitemapUrl) {
       return NextResponse.json({ error: 'sitemapUrl is required' }, { status: 400 })
     }
 
-    const imported = await importSitemapContent(sitemapUrl, MAX_SITEMAP_PAGES)
-    const importedSources = []
+    const normalizedSitemapUrl = normalizeKnowledgeImportUrl(sitemapUrl).toString()
 
-    for (const page of imported.pages) {
-      const duplicate = await clinicData.knowledgeSource.findFirst({
-        where: { clinicId: clinic.id, type: 'website', sourceUrl: page.url },
-      })
+    await enqueueKnowledgeJob(supabase, {
+      clinicId: current.clinic.id,
+      jobType: 'import_sitemap',
+      payload: {
+        sitemapUrl: normalizedSitemapUrl,
+        maxPages: MAX_SITEMAP_PAGES,
+      },
+    })
 
-      if (duplicate) {
-        await clinicData.knowledgeSource.update({
-          where: { id: duplicate.id },
-          data: {
-            title: page.title,
-            content: page.content,
-            status: 'processing',
-            errorMessage: null,
-          },
-        })
-        await rebuildKnowledgeSourceChunks(duplicate.id)
-        importedSources.push(await clinicData.knowledgeSource.findUnique({ where: { id: duplicate.id } }))
-      } else {
-        const created = await createKnowledgeSource({
-          clinicId: clinic.id,
-          title: page.title,
-          type: 'website',
-          content: page.content,
-          sourceUrl: page.url,
-        })
-        importedSources.push(created)
-      }
-    }
+    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-sitemap' }).catch(() => {}))
 
     return NextResponse.json({
-      sitemapUrl: imported.sitemapUrl,
-      importedCount: importedSources.length,
+      sitemapUrl: normalizedSitemapUrl,
+      importedCount: 0,
       maxPages: MAX_SITEMAP_PAGES,
-      sources: importedSources,
-    })
+      queued: true,
+      message: 'Sitemap import queued. Pages will appear after processing finishes.',
+    }, { status: 202 })
   } catch (error) {
     console.error('Error importing sitemap:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to import sitemap' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

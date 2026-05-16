@@ -53,26 +53,26 @@ import { toast } from 'sonner'
 interface WidgetSettings {
   botName: string
   welcomeMessage: string
-  tooltipText: string
-  showTooltip: boolean
-  inputPlaceholder: string
   primaryColor: string
-  textOnPrimary: string
   widgetPosition: 'bottom-right' | 'bottom-left'
-  widgetSize: 'compact' | 'comfortable' | 'large'
-  autoOpenDelay: 'off' | '5s' | '10s'
-  ctaText: string
-  ctaLink: string
   embedCode: string
   clinicId: string
+  allowedDomains: string[]
+  slug: string
 }
+
+type QuickPromptIntent =
+  | 'book_appointment'
+  | 'clinic_hours'
+  | 'services_fees'
+  | 'location'
+  | 'talk_on_whatsapp'
+  | 'emergency_help'
 
 interface QuickPrompt {
   id: string
   label: string
-  message: string
-  actionType: 'message' | 'appointment' | 'link'
-  actionValue: string | null
+  intent: string
   sortOrder: number
   isActive: boolean
 }
@@ -84,28 +84,65 @@ interface WidgetTemplate {
   textOnPrimary: string
 }
 
-const longFields = new Set(['welcomeMessage', 'tooltipText', 'inputPlaceholder', 'ctaLink'])
+const longFields = new Set(['welcomeMessage'])
 
 const emptyPrompt: {
   label: string
-  message: string
-  actionType: QuickPrompt['actionType']
-  actionValue: string
+  intent: QuickPromptIntent
   sortOrder: number
   isActive: boolean
 } = {
   label: '',
-  message: '',
-  actionType: 'message',
-  actionValue: '',
+  intent: 'book_appointment',
   sortOrder: 99,
   isActive: true,
 }
 
-const actionTypeLabels: Record<QuickPrompt['actionType'], string> = {
-  message: 'Send Message',
-  appointment: 'Open Appointment Form',
-  link: 'Open Link',
+const quickPromptIntentOptions: Array<{
+  value: QuickPromptIntent
+  label: string
+  description: string
+}> = [
+  {
+    value: 'book_appointment',
+    label: 'Book Appointment',
+    description: 'Opens the appointment form inside the widget.',
+  },
+  {
+    value: 'clinic_hours',
+    label: 'Clinic Hours',
+    description: 'Sends a message asking about clinic hours.',
+  },
+  {
+    value: 'services_fees',
+    label: 'Services & Fees',
+    description: 'Sends a message asking about services and pricing.',
+  },
+  {
+    value: 'location',
+    label: 'Location',
+    description: 'Opens the clinic location link.',
+  },
+  {
+    value: 'talk_on_whatsapp',
+    label: 'Talk on WhatsApp',
+    description: 'Opens the clinic WhatsApp link.',
+  },
+  {
+    value: 'emergency_help',
+    label: 'Emergency Help',
+    description: 'Sends an emergency help message.',
+  },
+]
+
+function getQuickPromptIntentMeta(intent?: string | null) {
+  return (
+    quickPromptIntentOptions.find((option) => option.value === intent) || {
+      value: 'clinic_hours',
+      label: intent || 'Custom Intent',
+      description: 'Legacy or custom prompt intent.',
+    }
+  )
 }
 
 export default function WidgetInstallPage() {
@@ -122,6 +159,9 @@ export default function WidgetInstallPage() {
   const [promptForm, setPromptForm] = useState<typeof emptyPrompt>(emptyPrompt)
   const [copySuccess, setCopySuccess] = useState(false)
   const [previewVersion, setPreviewVersion] = useState(1)
+  const [domainsText, setDomainsText] = useState('')
+  const [editingDomains, setEditingDomains] = useState(false)
+  const [savingDomains, setSavingDomains] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -137,6 +177,15 @@ export default function WidgetInstallPage() {
       const promptsData = await promptsRes.json()
       setSettings(settingsData)
       setPrompts(promptsData)
+
+      // Initialize domains textarea from settings
+      if (settingsData.allowedDomains) {
+        setDomainsText(settingsData.allowedDomains.join('\n'))
+      }
+      if (settingsData.slug) {
+        // Update settings with slug if not already present
+        settingsData.slug = settingsData.slug
+      }
 
       const templatesRes = await fetch('/api/widget-settings/templates')
       if (templatesRes.ok) {
@@ -163,16 +212,8 @@ export default function WidgetInstallPage() {
     () => [
       { key: 'botName', label: 'Bot Name' },
       { key: 'welcomeMessage', label: 'Welcome Message' },
-      { key: 'tooltipText', label: 'Tooltip Text' },
-      { key: 'showTooltip', label: 'Show Tooltip' },
-      { key: 'inputPlaceholder', label: 'Input Placeholder' },
       { key: 'primaryColor', label: 'Primary Color' },
-      { key: 'textOnPrimary', label: 'Text on Primary' },
       { key: 'widgetPosition', label: 'Widget Position' },
-      { key: 'widgetSize', label: 'Widget Size' },
-      { key: 'autoOpenDelay', label: 'Auto-open' },
-      { key: 'ctaText', label: 'CTA Text' },
-      { key: 'ctaLink', label: 'CTA Link' },
     ] as Array<{ key: keyof WidgetSettings; label: string }>,
     []
   )
@@ -180,8 +221,32 @@ export default function WidgetInstallPage() {
   const activePromptCount = prompts.filter((prompt) => prompt.isActive).length
 
   const previewUrl = settings?.clinicId
-    ? `/widget-frame?clinicId=${encodeURIComponent(settings.clinicId)}&preview=${previewVersion}`
-    : `/widget-frame?preview=${previewVersion}`
+    ? `/widget-frame?clinicId=${encodeURIComponent(settings.clinicId)}&preview=${previewVersion}&mode=embedded`
+    : `/widget-frame?preview=${previewVersion}&mode=embedded`
+
+  const saveAllowedDomains = async () => {
+    setSavingDomains(true)
+    try {
+      const domains = domainsText
+        .split('\n')
+        .map((d) => d.trim())
+        .filter(Boolean)
+      const res = await fetch('/api/widget-settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowedDomains: domains }),
+      })
+      if (!res.ok) throw new Error('Failed to save domains')
+      const updated = await res.json()
+      setSettings((prev) => (prev ? { ...prev, ...updated } : prev))
+      setEditingDomains(false)
+      toast.success('Allowed domains updated')
+    } catch {
+      toast.error('Failed to update allowed domains')
+    } finally {
+      setSavingDomains(false)
+    }
+  }
 
   const openSettingsEditor = (field: keyof WidgetSettings) => {
     if (!settings) return
@@ -229,9 +294,7 @@ export default function WidgetInstallPage() {
       setEditingPrompt(prompt)
       setPromptForm({
         label: prompt.label,
-        message: prompt.message,
-        actionType: prompt.actionType,
-        actionValue: prompt.actionValue || '',
+        intent: (prompt.intent as QuickPromptIntent) || 'book_appointment',
         sortOrder: prompt.sortOrder,
         isActive: prompt.isActive,
       })
@@ -243,22 +306,18 @@ export default function WidgetInstallPage() {
   }
 
   const savePrompt = async () => {
-    if (!promptForm.label.trim() || !promptForm.message.trim()) {
-      toast.error('Prompt label and message are required')
-      return
-    }
-
-    if (promptForm.actionType === 'link' && !promptForm.actionValue.trim()) {
-      toast.error('Link action requires a URL in Action Value')
+    if (!promptForm.label.trim()) {
+      toast.error('Prompt label is required')
       return
     }
 
     setSubmitting(true)
     try {
       const payload = {
-        ...promptForm,
-        actionValue:
-          promptForm.actionType === 'link' ? promptForm.actionValue.trim() : promptForm.actionValue || '',
+        label: promptForm.label.trim(),
+        intent: promptForm.intent,
+        sortOrder: promptForm.sortOrder,
+        isActive: promptForm.isActive,
       }
 
       const res = await fetch(
@@ -397,6 +456,75 @@ export default function WidgetInstallPage() {
                 <p>1. Paste snippet in your website footer template.</p>
                 <p>2. Publish your site and hard refresh once.</p>
                 <p>3. Verify launcher appears bottom corner and opens chat correctly.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200">
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-base">Allowed Domains</CardTitle>
+              <CardDescription>
+                Only these websites can embed your widget. One domain per line, exact https:// origin format.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {editingDomains ? (
+                <div className="space-y-3">
+                  <Textarea
+                    rows={5}
+                    value={domainsText}
+                    onChange={(e) => setDomainsText(e.target.value)}
+                    placeholder="https://your-clinic-website.com"
+                    className="font-mono text-xs"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      className="bg-emerald-600 hover:bg-emerald-700"
+                      onClick={() => void saveAllowedDomains()}
+                      disabled={savingDomains}
+                    >
+                      {savingDomains ? 'Saving...' : 'Save Domains'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingDomains(false)
+                        setDomainsText(settings?.allowedDomains?.join('\n') || '')
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {settings?.allowedDomains && settings.allowedDomains.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {settings.allowedDomains.map((domain) => (
+                        <Badge key={domain} variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 font-mono text-xs">
+                          {domain}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">No domains configured yet. Add at least one domain to enable the widget.</p>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditingDomains(true)}
+                  >
+                    <Pencil className="mr-1 size-3.5" />
+                    Edit Domains
+                  </Button>
+                </div>
+              )}
+              <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-800">
+                <p className="font-medium text-amber-900">Important</p>
+                <p>Your website CSP must allow <code className="bg-amber-100 px-1 rounded">script-src</code> and <code className="bg-amber-100 px-1 rounded">frame-src</code> pointing to this app domain.</p>
               </div>
             </CardContent>
           </Card>
@@ -573,11 +701,13 @@ export default function WidgetInstallPage() {
                           <TableCell>
                             <div className="space-y-1">
                               <div className="font-medium text-slate-800">{prompt.label}</div>
-                              <div className="text-xs text-slate-500">{prompt.message}</div>
+                              <div className="text-xs text-slate-500">
+                                {getQuickPromptIntentMeta(prompt.intent).description}
+                              </div>
                             </div>
                           </TableCell>
                           <TableCell className="text-sm text-slate-600">
-                            {actionTypeLabels[prompt.actionType]}
+                            {getQuickPromptIntentMeta(prompt.intent).label}
                           </TableCell>
                           <TableCell className="text-sm text-slate-600">{prompt.sortOrder}</TableCell>
                           <TableCell>
@@ -683,6 +813,43 @@ export default function WidgetInstallPage() {
                 onChange={(event) => setFieldValue(event.target.value)}
               />
             </div>
+          ) : editingField === 'primaryColor' ? (
+            <div className="space-y-2">
+              <Label>Primary Color</Label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  value={/^#[0-9a-fA-F]{6}$/.test(String(fieldValue)) ? String(fieldValue) : '#059669'}
+                  onChange={(event) => setFieldValue(event.target.value)}
+                  className="h-10 w-14 rounded-md border border-gray-200 p-1 cursor-pointer"
+                />
+                <Input
+                  value={String(fieldValue)}
+                  onChange={(event) => setFieldValue(event.target.value)}
+                  placeholder="#059669"
+                  className="flex-1 font-mono"
+                />
+              </div>
+              {!/^#[0-9a-fA-F]{6}$/.test(String(fieldValue)) && String(fieldValue).length > 0 && (
+                <p className="text-xs text-red-600">Must be a 6-digit hex color like #059669</p>
+              )}
+            </div>
+          ) : editingField === 'widgetPosition' ? (
+            <div className="space-y-2">
+              <Label>Widget Position</Label>
+              <Select
+                value={String(fieldValue)}
+                onValueChange={(value) => setFieldValue(value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select position" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bottom-right">Bottom Right</SelectItem>
+                  <SelectItem value="bottom-left">Bottom Left</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           ) : (
             <div className="space-y-2">
               <Label>Value</Label>
@@ -715,37 +882,29 @@ export default function WidgetInstallPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Message</Label>
-              <Textarea
-                rows={4}
-                value={promptForm.message}
-                onChange={(event) => setPromptForm((prev) => ({ ...prev, message: event.target.value }))}
-                placeholder="I want to schedule a braces consultation"
-              />
+              <Label>Intent</Label>
+              <Select
+                value={promptForm.intent}
+                onValueChange={(value) =>
+                  setPromptForm((prev) => ({
+                    ...prev,
+                    intent: value as QuickPromptIntent,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select prompt intent" />
+                </SelectTrigger>
+                <SelectContent>
+                  {quickPromptIntentOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Action Type</Label>
-                <Select
-                  value={promptForm.actionType}
-                  onValueChange={(value) =>
-                    setPromptForm((prev) => ({
-                      ...prev,
-                      actionType: value as QuickPrompt['actionType'],
-                      actionValue: value === 'message' || value === 'appointment' ? '' : prev.actionValue,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select action" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="message">Send Message</SelectItem>
-                    <SelectItem value="appointment">Open Appointment Form</SelectItem>
-                    <SelectItem value="link">Open Link</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="space-y-2">
                 <Label>Sort Order</Label>
                 <Input
@@ -756,28 +915,9 @@ export default function WidgetInstallPage() {
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>
-                Action Value{' '}
-                <span className="text-xs text-muted-foreground">
-                  ({promptForm.actionType === 'link' ? 'required for links' : 'optional'})
-                </span>
-              </Label>
-              <Input
-                value={promptForm.actionValue}
-                onChange={(event) =>
-                  setPromptForm((prev) => ({ ...prev, actionValue: event.target.value }))
-                }
-                placeholder={
-                  promptForm.actionType === 'link'
-                    ? 'https://wa.me/15550000000'
-                    : 'Optional override value'
-                }
-              />
-            </div>
             <div className="rounded-md border bg-slate-50/60 p-2.5 text-xs text-slate-600">
-              <p className="font-medium text-slate-700">Action Preview</p>
-              <p>{actionTypeLabels[promptForm.actionType]}</p>
+              <p className="font-medium text-slate-700">What this prompt does</p>
+              <p>{getQuickPromptIntentMeta(promptForm.intent).description}</p>
             </div>
             <div className="flex items-center justify-between rounded-md border p-3">
               <div>

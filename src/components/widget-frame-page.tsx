@@ -12,10 +12,25 @@ const SmileWellWidget = dynamic(() => import('@/components/smilewell-widget'), {
   ),
 })
 
-export default function WidgetFramePage({ clinicId }: { clinicId: string | null }) {
-  void clinicId
+export default function WidgetFramePage({
+  clinicId,
+  clinicSlug,
+}: {
+  clinicId: string | null
+  clinicSlug: string | null
+}) {
   const searchParams = useSearchParams()
   const embedded = searchParams.get('mode') === 'embedded'
+  const preview = searchParams.has('preview')
+  const sessionHandoff = searchParams.get('handoff') === '1'
 
-  return <SmileWellWidget embedded={embedded} />
+  return (
+    <SmileWellWidget
+      embedded={embedded}
+      clinicId={clinicId}
+      clinicSlug={clinicSlug}
+      preview={preview}
+      sessionHandoff={sessionHandoff}
+    />
+  )
 }

@@ -1,55 +1,99 @@
-import { createKnowledgeSource, clinicData, getDefaultClinic, rebuildKnowledgeSourceChunks } from '@/lib/clinic-data'
-import { importWebsiteContent } from '@/lib/knowledge-import'
-import { NextRequest, NextResponse } from 'next/server'
+import { normalizeKnowledgeImportUrl } from '@/lib/knowledge-import'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import {
+  createKnowledgeSourceDraft,
+  findKnowledgeSourceByUrl,
+  mapKnowledgeSource,
+  updateKnowledgeSourceDraft,
+} from '@/lib/knowledge/sources'
+import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+
+export const maxDuration = 30
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const clinic = await getDefaultClinic()
-    if (!clinic) {
-      return NextResponse.json({ error: 'Clinic not found' }, { status: 404 })
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const body = await request.json()
-    const { url } = body
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
+    }
 
-    if (!url?.trim()) {
+    const body = await request.json().catch(() => null)
+    const url = String(body?.url ?? '').trim()
+
+    if (!url) {
       return NextResponse.json({ error: 'url is required' }, { status: 400 })
     }
 
-    const imported = await importWebsiteContent(url.trim())
-
-    const duplicate = await clinicData.knowledgeSource.findFirst({
-      where: { clinicId: clinic.id, type: 'website', sourceUrl: imported.url },
-    })
+    const normalizedUrl = normalizeKnowledgeImportUrl(url).toString()
+    const duplicate = await findKnowledgeSourceByUrl(supabase, current.clinic.id, normalizedUrl)
 
     if (duplicate) {
-      await clinicData.knowledgeSource.update({
-        where: { id: duplicate.id },
-        data: {
-          title: imported.title,
-          content: imported.content,
-          status: 'processing',
-          errorMessage: null,
+      await updateKnowledgeSourceDraft(supabase, current.clinic.id, duplicate.id, {
+        title: duplicate.title || new URL(normalizedUrl).hostname,
+        sourceUrl: normalizedUrl,
+        status: 'queued',
+        failedReason: null,
+        isActive: true,
+        metadata: {
+          ...(duplicate.metadata ?? {}),
+          importedUrl: normalizedUrl,
+          importMode: 'website',
         },
       })
-      await rebuildKnowledgeSourceChunks(duplicate.id)
-      const updated = await clinicData.knowledgeSource.findUnique({ where: { id: duplicate.id } })
 
-      return NextResponse.json(updated)
+      await enqueueKnowledgeJob(supabase, {
+        clinicId: current.clinic.id,
+        sourceId: duplicate.id,
+        jobType: 'import_website_source',
+        payload: {
+          url: normalizedUrl,
+          importMode: 'website',
+        },
+      })
+
+      after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch(() => {}))
+
+      const updated = await findKnowledgeSourceByUrl(supabase, current.clinic.id, normalizedUrl)
+      return NextResponse.json(updated ? mapKnowledgeSource(updated) : null, { status: 202 })
     }
 
-    const source = await createKnowledgeSource({
-      clinicId: clinic.id,
-      title: imported.title,
-      type: 'website',
-      content: imported.content,
-      sourceUrl: imported.url,
+    const created = await createKnowledgeSourceDraft(supabase, {
+      clinicId: current.clinic.id,
+      title: new URL(normalizedUrl).hostname,
+      sourceType: 'website_url',
+      content: '',
+      sourceUrl: normalizedUrl,
+      createdBy: user.id,
+      metadata: {
+        importedUrl: normalizedUrl,
+        importMode: 'website',
+      },
+      status: 'queued',
     })
 
-    return NextResponse.json(source, { status: 201 })
+    await enqueueKnowledgeJob(supabase, {
+      clinicId: current.clinic.id,
+      sourceId: created.id,
+      jobType: 'import_website_source',
+      payload: {
+        url: normalizedUrl,
+        importMode: 'website',
+      },
+    })
+
+    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch(() => {}))
+
+    return NextResponse.json(created ? mapKnowledgeSource(created) : null, { status: 202 })
   } catch (error) {
     console.error('Error importing website:', error)
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to import website' }, { status: 500 })

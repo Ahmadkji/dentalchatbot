@@ -1,71 +1,94 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireOwnership } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
 
-    const conversation = await db.conversation.findUnique({
-      where: { id },
-    });
+    const { id } = await params
+    const adminClient = createSupabaseAdminClient()
 
-    const ownershipError = requireOwnership(conversation, user.id);
-    if (ownershipError) return ownershipError;
+    // Verify conversation belongs to this clinic
+    const { data: conversation, error: convError } = await adminClient
+      .from('conversations')
+      .select('*')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    const convMessages = await db.message.findMany({
-      where: { conversationId: id },
-      orderBy: { createdAt: 'asc' },
-    });
-    const events = await db.interactionEvent.findMany({ where: { conversationId: id } })
-    const counts = events.reduce(
-      (acc, event) => {
-        if (event.eventType === 'whatsapp_click') acc.whatsapp += 1
-        if (event.eventType === 'location_click') acc.location += 1
-        if (event.eventType === 'directions_click') acc.directions += 1
-        if (event.eventType === 'call_click') acc.call += 1
+    if (convError) throw convError
+    if (!conversation) {
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+    }
+
+    // Get messages
+    const { data: convMessages, error: msgError } = await adminClient
+      .from('conversation_messages')
+      .select('*')
+      .eq('conversation_id', id)
+      .order('created_at', { ascending: true })
+
+    if (msgError) throw msgError
+
+    // Get event counts
+    const { data: events } = await adminClient
+      .from('interaction_events')
+      .select('event_type')
+      .eq('conversation_id', id)
+
+    const counts = (events ?? []).reduce(
+      (acc: { whatsapp: number; location: number; directions: number; call: number }, event: { event_type: string }) => {
+        if (event.event_type === 'whatsapp_click') acc.whatsapp += 1
+        if (event.event_type === 'location_click') acc.location += 1
+        if (event.event_type === 'directions_click') acc.directions += 1
+        if (event.event_type === 'call_click') acc.call += 1
         return acc
       },
-      { whatsapp: 0, location: 0, directions: 0, call: 0 }
+      { whatsapp: 0, location: 0, directions: 0, call: 0 },
     )
 
-    const convPatient = await db.patient.findUnique({ where: { id: conversation.patientId } });
-
-    // Return flattened conversation with messages
     return NextResponse.json({
       id: conversation.id,
-      patientId: conversation.patientId,
-      patientName: convPatient?.name ?? 'Unknown',
+      patientId: null,
+      patientName: conversation.visitor_name || 'Website Visitor',
       channel: conversation.channel,
       status: conversation.status,
       subject: conversation.subject,
-      messageCount: conversation.messageCount,
-      lastMessage: conversation.lastMessage,
-      sourcePage: conversation.sourcePage,
-      helpfulStatus: conversation.helpfulStatus,
-      needsImprovement: conversation.needsImprovement,
-      leadCaptured: conversation.leadCaptured,
-      appointmentRequested: conversation.appointmentRequested,
+      messageCount: conversation.message_count,
+      lastMessage: conversation.last_message,
+      sourcePage: conversation.source_page,
+      helpfulStatus: conversation.helpful_status,
+      needsImprovement: conversation.needs_improvement,
+      leadCaptured: conversation.lead_captured,
+      appointmentRequested: conversation.appointment_requested,
       whatsappClicks: counts.whatsapp,
       locationClicks: counts.location,
       directionsClicks: counts.directions,
       callClicks: counts.call,
-      createdAt: conversation.createdAt,
-      updatedAt: conversation.updatedAt,
-      messages: convMessages,
-    });
+      createdAt: conversation.created_at,
+      updatedAt: conversation.updated_at,
+      messages: (convMessages ?? []).map((m: Record<string, unknown>) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at,
+      })),
+    })
   } catch (error) {
-    console.error('Error fetching conversation:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch conversation' },
-      { status: 500 }
-    );
+    console.error('Error fetching conversation:', error)
+    return NextResponse.json({ error: 'Failed to fetch conversation' }, { status: 500 })
   }
 }
 
@@ -73,13 +96,19 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const { status, helpfulStatus, needsImprovement, leadCaptured, appointmentRequested, sourcePage } = body;
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
+    const { id } = await params
+    const body = await request.json()
+    const { status, helpfulStatus, needsImprovement, leadCaptured, appointmentRequested, sourcePage } = body
 
     if (
       status === undefined &&
@@ -91,69 +120,82 @@ export async function PATCH(
     ) {
       return NextResponse.json(
         { error: 'At least one update field is required' },
-        { status: 400 }
-      );
+        { status: 400 },
+      )
     }
 
-    const existing = await db.conversation.findUnique({
-      where: { id },
-    });
+    const adminClient = createSupabaseAdminClient()
 
-    const ownershipError = requireOwnership(existing, user.id);
-    if (ownershipError) return ownershipError;
+    // Verify conversation belongs to this clinic
+    const { data: existing, error: findError } = await adminClient
+      .from('conversations')
+      .select('id, clinic_id')
+      .eq('id', id)
+      .eq('clinic_id', current.clinic.id)
+      .maybeSingle()
 
-    const conversation = await db.conversation.update({
-      where: { id },
-      data: {
-        ...(status !== undefined ? { status } : {}),
-        ...(helpfulStatus !== undefined ? { helpfulStatus } : {}),
-        ...(needsImprovement !== undefined ? { needsImprovement } : {}),
-        ...(leadCaptured !== undefined ? { leadCaptured } : {}),
-        ...(appointmentRequested !== undefined ? { appointmentRequested } : {}),
-        ...(sourcePage !== undefined ? { sourcePage } : {}),
-      },
-    });
+    if (findError) throw findError
+    if (!existing) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
 
-    const convPatient = await db.patient.findUnique({ where: { id: conversation.patientId } });
-    const events = await db.interactionEvent.findMany({ where: { conversationId: id } })
-    const counts = events.reduce(
-      (acc, event) => {
-        if (event.eventType === 'whatsapp_click') acc.whatsapp += 1
-        if (event.eventType === 'location_click') acc.location += 1
-        if (event.eventType === 'directions_click') acc.directions += 1
-        if (event.eventType === 'call_click') acc.call += 1
+    const updateData: Record<string, unknown> = {}
+    if (status !== undefined) updateData.status = status
+    if (helpfulStatus !== undefined) updateData.helpful_status = helpfulStatus
+    if (needsImprovement !== undefined) updateData.needs_improvement = needsImprovement
+    if (leadCaptured !== undefined) updateData.lead_captured = leadCaptured
+    if (appointmentRequested !== undefined) updateData.appointment_requested = appointmentRequested
+    if (sourcePage !== undefined) updateData.source_page = sourcePage
+
+    const { data: conversation, error } = await adminClient
+      .from('conversations')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    // Get event counts for response
+    const { data: events } = await adminClient
+      .from('interaction_events')
+      .select('event_type')
+      .eq('conversation_id', id)
+
+    const counts = (events ?? []).reduce(
+      (acc: { whatsapp: number; location: number; directions: number; call: number }, event: { event_type: string }) => {
+        if (event.event_type === 'whatsapp_click') acc.whatsapp += 1
+        if (event.event_type === 'location_click') acc.location += 1
+        if (event.event_type === 'directions_click') acc.directions += 1
+        if (event.event_type === 'call_click') acc.call += 1
         return acc
       },
-      { whatsapp: 0, location: 0, directions: 0, call: 0 }
+      { whatsapp: 0, location: 0, directions: 0, call: 0 },
     )
 
-    // Return flattened response consistent with list endpoint
     return NextResponse.json({
       id: conversation.id,
-      patientId: conversation.patientId,
-      patientName: convPatient?.name ?? 'Unknown',
+      patientId: null,
+      patientName: conversation.visitor_name || 'Website Visitor',
       channel: conversation.channel,
       status: conversation.status,
       subject: conversation.subject,
-      messageCount: conversation.messageCount,
-      lastMessage: conversation.lastMessage,
-      sourcePage: conversation.sourcePage,
-      helpfulStatus: conversation.helpfulStatus,
-      needsImprovement: conversation.needsImprovement,
-      leadCaptured: conversation.leadCaptured,
-      appointmentRequested: conversation.appointmentRequested,
+      messageCount: conversation.message_count,
+      lastMessage: conversation.last_message,
+      sourcePage: conversation.source_page,
+      helpfulStatus: conversation.helpful_status,
+      needsImprovement: conversation.needs_improvement,
+      leadCaptured: conversation.lead_captured,
+      appointmentRequested: conversation.appointment_requested,
       whatsappClicks: counts.whatsapp,
       locationClicks: counts.location,
       directionsClicks: counts.directions,
       callClicks: counts.call,
-      createdAt: conversation.createdAt,
-      updatedAt: conversation.updatedAt,
-    });
+      createdAt: conversation.created_at,
+      updatedAt: conversation.updated_at,
+    })
   } catch (error) {
-    console.error('Error updating conversation:', error);
-    return NextResponse.json(
-      { error: 'Failed to update conversation' },
-      { status: 500 }
-    );
+    console.error('Error updating conversation:', error)
+    return NextResponse.json({ error: 'Failed to update conversation' }, { status: 500 })
   }
 }

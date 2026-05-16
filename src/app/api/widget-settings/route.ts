@@ -1,20 +1,33 @@
-import { clinicData, getDefaultClinic, getDefaultWidgetSettings } from '@/lib/clinic-data'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { normalizeAllowedDomains } from '@/lib/clinics/validation'
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+const VALID_POSITIONS = ['bottom-right', 'bottom-left'] as const
+const VALID_POSITIONS_SET: Set<string> = new Set(VALID_POSITIONS)
 
 const editableFields = [
   'botName',
   'welcomeMessage',
-  'tooltipText',
-  'showTooltip',
-  'inputPlaceholder',
   'primaryColor',
-  'textOnPrimary',
   'widgetPosition',
-  'widgetSize',
-  'autoOpenDelay',
-  'ctaText',
-  'ctaLink',
+  'allowedDomains',
 ] as const
+
+interface WidgetSettingsRow {
+  id: string
+  clinic_id: string
+  enabled: boolean
+  widget_title: string
+  welcome_message: string
+  primary_color: string
+  position: 'bottom-right' | 'bottom-left'
+  show_whatsapp_button: boolean
+  show_call_button: boolean
+  show_location_button: boolean
+  allowed_domains: string[]
+}
 
 function resolveScriptOrigin(request: NextRequest) {
   const forwardedProto = request.headers.get('x-forwarded-proto')
@@ -38,23 +51,49 @@ function resolveScriptOrigin(request: NextRequest) {
   return 'https://yourdomain.com'
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    const clinic = await getDefaultClinic()
-    const widgetSettings = await getDefaultWidgetSettings()
+function mapWidgetSettings(row: WidgetSettingsRow, clinic: { id: string; slug: string; whatsapp: string | null }, embedCode?: string) {
+  return {
+    id: row.id,
+    clinicId: row.clinic_id,
+    slug: clinic.slug,
+    enabled: row.enabled,
+    botName: row.widget_title,
+    welcomeMessage: row.welcome_message,
+    primaryColor: row.primary_color,
+    widgetPosition: row.position,
+    showWhatsappButton: row.show_whatsapp_button,
+    showCallButton: row.show_call_button,
+    showLocationButton: row.show_location_button,
+    allowedDomains: row.allowed_domains,
+    embedCode,
+  }
+}
 
-    if (!clinic || !widgetSettings) {
+export async function GET(request: NextRequest) {
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  try {
+    const { clinic } = await getCurrentClinic(supabase, user)
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
+    }
+
+    const { data: widgetSettings, error } = await supabase
+      .from('widget_settings')
+      .select('id,clinic_id,enabled,widget_title,welcome_message,primary_color,position,show_whatsapp_button,show_call_button,show_location_button,allowed_domains')
+      .eq('clinic_id', clinic.id)
+      .maybeSingle()
+
+    if (error || !widgetSettings) {
       return NextResponse.json({ error: 'Widget settings not found' }, { status: 404 })
     }
 
     const origin = resolveScriptOrigin(request)
-    const embedCode = `<script src="${origin}/widget.js" data-clinic-id="${clinic.id}"></script>`
+    const embedCode = `<script src="${origin}/widget.js" data-clinic-slug="${clinic.slug}"></script>`
 
-    return NextResponse.json({
-      ...widgetSettings,
-      clinicId: clinic.id,
-      embedCode,
-    })
+    return NextResponse.json(mapWidgetSettings(widgetSettings as WidgetSettingsRow, clinic, embedCode))
   } catch (error) {
     console.error('Error fetching widget settings:', error)
     return NextResponse.json({ error: 'Failed to fetch widget settings' }, { status: 500 })
@@ -62,10 +101,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const widgetSettings = await getDefaultWidgetSettings()
-    if (!widgetSettings) {
-      return NextResponse.json({ error: 'Widget settings not found' }, { status: 404 })
+    const { clinic } = await getCurrentClinic(supabase, user)
+    if (!clinic) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
     const body = await request.json()
@@ -77,12 +120,44 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    const updated = await clinicData.widgetSetting.update({
-      where: { id: widgetSettings.id },
-      data,
-    })
+    const updateData: Record<string, unknown> = {}
+    if (typeof data.botName === 'string') updateData.widget_title = data.botName
+    if (typeof data.welcomeMessage === 'string') updateData.welcome_message = data.welcomeMessage
+    if (typeof data.primaryColor === 'string') {
+      if (!HEX_COLOR_RE.test(data.primaryColor)) {
+        return NextResponse.json(
+          { error: 'primaryColor must be a 6-digit hex color like #059669' },
+          { status: 400 },
+        )
+      }
+      updateData.primary_color = data.primaryColor
+    }
+    if (typeof data.widgetPosition === 'string') {
+      if (!VALID_POSITIONS_SET.has(data.widgetPosition)) {
+        return NextResponse.json(
+          { error: `widgetPosition must be one of: ${VALID_POSITIONS.join(', ')}` },
+          { status: 400 },
+        )
+      }
+      updateData.position = data.widgetPosition
+    }
+    if (Array.isArray(data.allowedDomains)) {
+      const normalized = normalizeAllowedDomains(data.allowedDomains as string[])
+      updateData.allowed_domains = normalized
+    }
 
-    return NextResponse.json(updated)
+    const { data: updated, error } = await supabase
+      .from('widget_settings')
+      .update(updateData)
+      .eq('clinic_id', clinic.id)
+      .select('id,clinic_id,enabled,widget_title,welcome_message,primary_color,position,show_whatsapp_button,show_call_button,show_location_button,allowed_domains')
+      .single()
+
+    if (error) {
+      return NextResponse.json({ error: 'Failed to update widget settings' }, { status: 400 })
+    }
+
+    return NextResponse.json(mapWidgetSettings(updated as WidgetSettingsRow, clinic))
   } catch (error) {
     console.error('Error updating widget settings:', error)
     return NextResponse.json({ error: 'Failed to update widget settings' }, { status: 500 })

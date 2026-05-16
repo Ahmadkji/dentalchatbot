@@ -1,74 +1,81 @@
-import { db } from '@/lib/db';
-import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-helpers';
+import { NextRequest, NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth-helpers'
+import { getCurrentClinic } from '@/lib/clinics/current'
+import { deleteFaqEntry, getFaqEntryForClinic, updateFaqEntry } from '@/lib/knowledge/faq'
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const { question, answer, order, isActive } = body;
-
-    const existing = await db.fAQ.findUnique({ where: { id } });
-
-    if (!existing) {
-      return NextResponse.json(
-        { error: 'FAQ not found' },
-        { status: 404 }
-      );
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const data: Record<string, unknown> = {};
-    if (question !== undefined) data.question = question;
-    if (answer !== undefined) data.answer = answer;
-    if (order !== undefined) data.order = order;
-    if (isActive !== undefined) data.isActive = isActive;
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
+    }
 
-    const faq = await db.fAQ.update({
-      where: { id },
-      data,
-    });
+    const { id } = await params
+    const existing = await getFaqEntryForClinic(supabase, current.clinic.id, id)
+    if (!existing) {
+      return NextResponse.json({ error: 'FAQ not found' }, { status: 404 })
+    }
 
-    return NextResponse.json(faq);
+    const body = await request.json().catch(() => null)
+    const updated = await updateFaqEntry(supabase, current.clinic.id, id, {
+      question: body?.question !== undefined ? String(body.question).trim() : undefined,
+      answer: body?.answer !== undefined ? String(body.answer).trim() : undefined,
+      category: body?.category !== undefined ? (body.category ? String(body.category).trim() : null) : undefined,
+      order: body?.order !== undefined ? Number(body.order) : undefined,
+      isActive: body?.isActive !== undefined ? Boolean(body.isActive) : undefined,
+    })
+
+    return NextResponse.json(updated)
   } catch (error) {
-    console.error('Error updating FAQ:', error);
+    console.error('Error updating FAQ:', error)
     return NextResponse.json(
-      { error: 'Failed to update FAQ' },
-      { status: 500 }
-    );
+      { error: error instanceof Error ? error.message : 'Failed to update FAQ' },
+      { status: 500 },
+    )
   }
 }
 
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error: authError } = await requireAuth();
-  if (authError) return authError;
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
+  if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   try {
-    const { id } = await params;
-
-    const existing = await db.fAQ.findUnique({ where: { id } });
-
-    if (!existing) {
-      return NextResponse.json(
-        { error: 'FAQ not found' },
-        { status: 404 }
-      );
+    const current = await getCurrentClinic(supabase, user)
+    if (!current.clinic || !current.membership) {
+      return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    await db.fAQ.delete({ where: { id } });
+    if (!['owner', 'admin'].includes(current.membership.role)) {
+      return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
+    }
 
-    return NextResponse.json({ message: 'FAQ deleted successfully' });
+    const { id } = await params
+    const deleted = await deleteFaqEntry(supabase, current.clinic.id, id)
+    if (!deleted) {
+      return NextResponse.json({ error: 'FAQ not found' }, { status: 404 })
+    }
+
+    return NextResponse.json({ message: 'FAQ deleted successfully' })
   } catch (error) {
-    console.error('Error deleting FAQ:', error);
+    console.error('Error deleting FAQ:', error)
     return NextResponse.json(
-      { error: 'Failed to delete FAQ' },
-      { status: 500 }
-    );
+      { error: error instanceof Error ? error.message : 'Failed to delete FAQ' },
+      { status: 500 },
+    )
   }
 }

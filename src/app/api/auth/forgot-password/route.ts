@@ -21,8 +21,9 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Email address is required.' }, 400)
   }
 
-  const email = typeof (payload as { email?: string }).email === 'string'
-    ? (payload as { email?: string }).email.trim().toLowerCase()
+  const body = payload as { email?: string }
+  const email = typeof body.email === 'string'
+    ? body.email.trim().toLowerCase()
     : ''
 
   if (!email) {

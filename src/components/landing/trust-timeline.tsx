@@ -26,8 +26,8 @@ const beforeSteps = [
   },
   {
     icon: AlertTriangle,
-    text: "No-show, no reminder",
-    desc: "Gap in schedule, lost revenue",
+    text: "No-show, lost revenue",
+    desc: "Gap in schedule, revenue lost",
   },
   {
     icon: UserX,
