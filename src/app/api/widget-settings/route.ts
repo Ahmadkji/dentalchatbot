@@ -1,19 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
+import { requireCurrentClinicAccess } from '@/lib/clinic-access'
 import { normalizeAllowedDomains } from '@/lib/clinics/validation'
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
 const VALID_POSITIONS = ['bottom-right', 'bottom-left'] as const
-const VALID_POSITIONS_SET: Set<string> = new Set(VALID_POSITIONS)
 
-const editableFields = [
-  'botName',
-  'welcomeMessage',
-  'primaryColor',
-  'widgetPosition',
-  'allowedDomains',
-] as const
+const widgetSettingsPatchSchema = z
+  .object({
+    botName: z.string().trim().min(1).max(80).optional(),
+    welcomeMessage: z.string().trim().min(1).max(500).optional(),
+    primaryColor: z.string().regex(HEX_COLOR_RE).optional(),
+    widgetPosition: z.enum(VALID_POSITIONS).optional(),
+    allowedDomains: z.array(z.string().trim().max(255)).max(25).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one editable field is required.',
+  })
 
 interface WidgetSettingsRow {
   id: string
@@ -106,41 +112,31 @@ export async function PATCH(request: NextRequest) {
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const { clinic } = await getCurrentClinic(supabase, user)
+    const access = await requireCurrentClinicAccess(supabase, user, ['owner', 'admin'])
+    if (access.error) return access.error
+
+    const { clinic } = access.current
     if (!clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const body = await request.json()
-    const data: Record<string, unknown> = {}
+    const body = await request.json().catch(() => null)
+    const parsed = widgetSettingsPatchSchema.safeParse(body)
 
-    for (const field of editableFields) {
-      if (body[field] !== undefined) {
-        data[field] = body[field]
-      }
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Invalid widget settings payload.' },
+        { status: 400 },
+      )
     }
+
+    const data: Record<string, unknown> = parsed.data
 
     const updateData: Record<string, unknown> = {}
     if (typeof data.botName === 'string') updateData.widget_title = data.botName
     if (typeof data.welcomeMessage === 'string') updateData.welcome_message = data.welcomeMessage
-    if (typeof data.primaryColor === 'string') {
-      if (!HEX_COLOR_RE.test(data.primaryColor)) {
-        return NextResponse.json(
-          { error: 'primaryColor must be a 6-digit hex color like #059669' },
-          { status: 400 },
-        )
-      }
-      updateData.primary_color = data.primaryColor
-    }
-    if (typeof data.widgetPosition === 'string') {
-      if (!VALID_POSITIONS_SET.has(data.widgetPosition)) {
-        return NextResponse.json(
-          { error: `widgetPosition must be one of: ${VALID_POSITIONS.join(', ')}` },
-          { status: 400 },
-        )
-      }
-      updateData.position = data.widgetPosition
-    }
+    if (data.primaryColor !== undefined) updateData.primary_color = data.primaryColor
+    if (data.widgetPosition !== undefined) updateData.position = data.widgetPosition
     if (Array.isArray(data.allowedDomains)) {
       const normalized = normalizeAllowedDomains(data.allowedDomains as string[])
       updateData.allowed_domains = normalized

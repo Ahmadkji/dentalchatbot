@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { assertSameOrigin, checkAuthRateLimit, getClientIp, registerSession } from '@/lib/security'
+import { assertSameOrigin, getClientIp, registerSession } from '@/lib/security'
+import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
 import { sanitizeNextPath } from '@/lib/auth/navigation'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { setPrivateNoStore, copyResponseCookies } from '@/lib/auth/response'
@@ -41,19 +42,30 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Password is required.' }, 400)
   }
 
-  const rateLimit = checkAuthRateLimit({
-    email,
-    ip: getClientIp(request.headers),
-  })
+  // Distributed rate limit: check both email and IP buckets (fail-closed)
+  const ip = getClientIp(request.headers)
+  const emailPreset = authEmailKey(email)
+  const ipPreset = authIpKey(ip)
+  const [emailResult, ipResult] = await Promise.all([
+    consumeDistributedRateLimit(emailPreset.key, emailPreset.limit, emailPreset.windowMs, 1, false),
+    consumeDistributedRateLimit(ipPreset.key, ipPreset.limit, ipPreset.windowMs, 1, false),
+  ])
+  const rateLimit = {
+    allowed: emailResult.allowed && ipResult.allowed,
+    remaining: Math.min(emailResult.remaining, ipResult.remaining),
+    resetAt: Math.min(emailResult.resetAt, ipResult.resetAt),
+  }
 
   if (!rateLimit.allowed) {
-    return buildResponse(
+    const response = buildResponse(
       {
         error: 'Too many attempts. Please try again later.',
         resetAt: rateLimit.resetAt,
       },
       429
     )
+    response.headers.set('Retry-After', String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)))
+    return response
   }
 
   const cookieResponse = NextResponse.next()

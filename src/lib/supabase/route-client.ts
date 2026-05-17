@@ -3,22 +3,19 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { getSupabaseAuthConfig } from './config'
 
-function applyStrictCookieDefaults(
+function applyCookieDefaults(
   options: Parameters<NextResponse['cookies']['set']>[2] | undefined
 ) {
   return {
     ...options,
     httpOnly: true,
-    sameSite: 'strict' as const,
+    sameSite: 'lax' as const,
     secure: options?.secure ?? process.env.NODE_ENV === 'production',
   }
 }
 
 export async function createSupabaseRouteClient(response?: NextResponse) {
   const config = getSupabaseAuthConfig()
-  if (!config) {
-    return null
-  }
 
   const cookieStore = await cookies()
 
@@ -27,9 +24,9 @@ export async function createSupabaseRouteClient(response?: NextResponse) {
       getAll() {
         return cookieStore.getAll()
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet, headers = {}) {
         cookiesToSet.forEach(({ name, value, options }) => {
-          const normalizedOptions = applyStrictCookieDefaults(options)
+          const normalizedOptions = applyCookieDefaults(options)
 
           if (response) {
             response.cookies.set(name, value, normalizedOptions)
@@ -38,6 +35,12 @@ export async function createSupabaseRouteClient(response?: NextResponse) {
 
           cookieStore.set(name, value, normalizedOptions)
         })
+
+        if (response) {
+          Object.entries(headers).forEach(([key, value]) => {
+            response.headers.set(key, value)
+          })
+        }
       },
     },
   })

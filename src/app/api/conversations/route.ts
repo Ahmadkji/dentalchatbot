@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 export async function GET(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -103,6 +105,15 @@ export async function POST(request: NextRequest) {
     if (!current.clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `conv-write:${current.clinic.id}:${user.id}:${ip}`,
+      limit: 60,
+      windowMs: 5 * 60 * 1000,
+      failOpen: true,
+    })
+    if (rl) return rl
 
     const body = await request.json()
     const { subject, channel } = body

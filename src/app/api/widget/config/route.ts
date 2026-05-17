@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { mintWidgetAccessToken } from '@/lib/widget/widget-access-token'
 import { getClientIp } from '@/lib/security'
-import { checkWidgetRateLimit, widgetConfigRateKey } from '@/lib/widget/widget-rate-limit'
+import { consumeDistributedRateLimit, widgetConfigKey } from '@/lib/rate-limit'
 import { isOriginAllowed } from '@/lib/clinics/validation'
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -20,9 +20,10 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Rate limit by IP
+    // Distributed rate limit by IP
     const ip = getClientIp(request.headers)
-    const rateLimit = checkWidgetRateLimit(widgetConfigRateKey(ip))
+    const preset = widgetConfigKey(ip)
+    const rateLimit = await consumeDistributedRateLimit(preset.key, preset.limit, preset.windowMs)
     if (!rateLimit.allowed) {
       const response = NextResponse.json(
         { error: 'Too many requests.' },

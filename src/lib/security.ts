@@ -1,7 +1,3 @@
-const DEFAULT_LIMIT = 5
-const DEFAULT_WINDOW_MS = 15 * 60 * 1000
-const API_RATE_LIMIT = 100
-const API_RATE_WINDOW_MS = 15 * 60 * 1000
 const MAX_SESSIONS_PER_USER = 5
 const TOKEN_REFRESH_LOCK_TTL_MS = 5000
 
@@ -16,109 +12,12 @@ const SENSITIVE_KEYS = new Set([
   'set-cookie',
 ])
 
-type BucketKind = 'email' | 'ip'
+// --------------- Rate limit types (shared) ---------------
 
-interface BucketResult {
+export interface BucketResult {
   allowed: boolean
   remaining: number
   resetAt: number
-}
-
-export interface RateLimitInput {
-  email?: string | null
-  ip?: string | null
-  limit?: number
-  windowMs?: number
-  now?: number
-}
-
-interface RateLimitState {
-  buckets: Map<string, number[]>
-}
-
-const globalForRateLimit = globalThis as typeof globalThis & {
-  __authRateLimitState__?: RateLimitState
-}
-
-const rateLimitState: RateLimitState =
-  globalForRateLimit.__authRateLimitState__ ?? {
-    buckets: new Map<string, number[]>(),
-  }
-
-globalForRateLimit.__authRateLimitState__ = rateLimitState
-
-function getBucketKey(kind: BucketKind, value: string): string {
-  return `${kind}:${value.trim().toLowerCase()}`
-}
-
-function getBucketResult(
-  key: string,
-  now: number,
-  limit: number,
-  windowMs: number
-): BucketResult {
-  const existing = rateLimitState.buckets.get(key) ?? []
-  const fresh = existing.filter((timestamp) => now - timestamp < windowMs)
-  const allowed = fresh.length < limit
-
-  if (allowed) {
-    fresh.push(now)
-    rateLimitState.buckets.set(key, fresh)
-  } else {
-    rateLimitState.buckets.set(key, fresh)
-  }
-
-  const remaining = Math.max(0, limit - fresh.length)
-  const resetAt = fresh.length > 0 ? fresh[0] + windowMs : now + windowMs
-
-  return { allowed, remaining, resetAt }
-}
-
-export function clearAuthRateLimitStore() {
-  rateLimitState.buckets.clear()
-}
-
-// --------------- Global API Rate Limiting (Item 19) ---------------
-
-interface ApiBucketState {
-  buckets: Map<string, number[]>
-}
-
-const globalForApiRateLimit = globalThis as typeof globalThis & {
-  __apiRateLimitState__?: ApiBucketState
-}
-
-const apiRateLimitState: ApiBucketState =
-  globalForApiRateLimit.__apiRateLimitState__ ?? {
-    buckets: new Map<string, number[]>(),
-  }
-
-globalForApiRateLimit.__apiRateLimitState__ = apiRateLimitState
-
-export function checkApiRateLimit(
-  ip: string,
-  limit: number = API_RATE_LIMIT,
-  windowMs: number = API_RATE_WINDOW_MS,
-  now: number = Date.now()
-): BucketResult {
-  const key = `api:${ip}`
-  const existing = apiRateLimitState.buckets.get(key) ?? []
-  const fresh = existing.filter((timestamp) => now - timestamp < windowMs)
-  const allowed = fresh.length < limit
-
-  if (allowed) {
-    fresh.push(now)
-  }
-  apiRateLimitState.buckets.set(key, fresh)
-
-  const remaining = Math.max(0, limit - fresh.length)
-  const resetAt = fresh.length > 0 ? fresh[0] + windowMs : now + windowMs
-
-  return { allowed, remaining, resetAt }
-}
-
-export function clearApiRateLimitStore() {
-  apiRateLimitState.buckets.clear()
 }
 
 // --------------- Token Refresh Lock (Item 23) ---------------
@@ -226,7 +125,12 @@ export function clearSessionRegistry() {
   sessionRegistryState.sessions.clear()
 }
 
-// --------------- Safe Logging (Item 29) ---------------
+/** Clear all sessions for a user from the in-memory registry. */
+export function clearUserSessions(userId: string): void {
+  sessionRegistryState.sessions.delete(userId)
+}
+
+// --------------- Safe Logging ---------------
 
 /**
  * Strip sensitive fields from an object before logging.
@@ -265,7 +169,7 @@ export function safeErrorLog(context: string, error: unknown): void {
   console.error(`[${context}]`, sanitized)
 }
 
-// --------------- Auth Rate Limiting (existing) ---------------
+// --------------- Origin & IP helpers ---------------
 
 export function assertSameOrigin(originHeader: string | null | undefined, nextUrl: URL) {
   const originValue = typeof originHeader === 'string' ? originHeader.trim() : ''
@@ -308,36 +212,4 @@ export function getClientIp(headers: Headers): string {
   }
 
   return 'unknown'
-}
-
-export function checkAuthRateLimit({
-  email,
-  ip,
-  limit = DEFAULT_LIMIT,
-  windowMs = DEFAULT_WINDOW_MS,
-  now = Date.now(),
-}: RateLimitInput) {
-  const targets: BucketResult[] = []
-
-  if (typeof email === 'string' && email.trim()) {
-    targets.push(getBucketResult(getBucketKey('email', email), now, limit, windowMs))
-  }
-
-  if (typeof ip === 'string' && ip.trim() && ip !== 'unknown') {
-    targets.push(getBucketResult(getBucketKey('ip', ip), now, limit, windowMs))
-  }
-
-  if (targets.length === 0) {
-    return {
-      allowed: true,
-      remaining: limit,
-      resetAt: now + windowMs,
-    }
-  }
-
-  return {
-    allowed: targets.every((target) => target.allowed),
-    remaining: Math.min(...targets.map((target) => target.remaining)),
-    resetAt: Math.min(...targets.map((target) => target.resetAt)),
-  }
 }

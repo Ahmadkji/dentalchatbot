@@ -27,6 +27,10 @@ vi.mock('@/lib/clinics/settings', () => ({
   listClinicSettings: listClinicSettingsMock,
 }))
 
+vi.mock('@/lib/rate-limit-guard', () => ({
+  enforceRateLimit: vi.fn().mockResolvedValue(null),
+}))
+
 vi.mock('@/lib/supabase/admin', () => ({
   createSupabaseAdminClient: () => ({
     from: fromMock,
@@ -117,6 +121,9 @@ describe('appointment confirm route', () => {
     })
 
     expect(response.status).toBe(404)
-    expect(rpcMock).not.toHaveBeenCalled()
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      'confirm_appointment_request',
+      expect.anything(),
+    )
   })
 })

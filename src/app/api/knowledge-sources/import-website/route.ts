@@ -2,6 +2,8 @@ import { normalizeKnowledgeImportUrl } from '@/lib/knowledge-import'
 import { after, NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 import {
   createKnowledgeSourceDraft,
   findKnowledgeSourceByUrl,
@@ -26,6 +28,15 @@ export async function POST(request: NextRequest) {
     if (!['owner', 'admin'].includes(current.membership.role)) {
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-import-web:${current.clinic.id}:${ip}`,
+      limit: 5,
+      windowMs: 15 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
 
     const body = await request.json().catch(() => null)
     const url = String(body?.url ?? '').trim()

@@ -6,7 +6,7 @@ import { CHAT_SESSION_COOKIE } from '@/lib/chat/session'
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { publicSessionTokenSchema, uuidSchema, clinicSlugSchema, widgetAccessTokenSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { checkWidgetRateLimit, widgetAppointmentRateKey } from '@/lib/widget/widget-rate-limit'
+import { consumeDistributedRateLimit, widgetAppointmentKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import { cookies } from 'next/headers'
 
@@ -110,10 +110,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid or expired widget access token.' }, { status: 401 })
       }
 
-      // Rate limit appointment requests
+      // Distributed rate limit appointment requests
       const effectiveVisitorId = visitorId || getClientIp(request.headers)
       const ip = getClientIp(request.headers)
-      const rateLimit = checkWidgetRateLimit(widgetAppointmentRateKey(effectiveVisitorId, ip))
+      const apptPreset = widgetAppointmentKey(effectiveVisitorId, ip)
+      const rateLimit = await consumeDistributedRateLimit(apptPreset.key, apptPreset.limit, apptPreset.windowMs)
       if (!rateLimit.allowed) {
         return NextResponse.json({ error: 'Too many appointment requests.' }, { status: 429 })
       }

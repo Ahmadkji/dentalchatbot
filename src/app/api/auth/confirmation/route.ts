@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { assertSameOrigin } from '@/lib/security'
+import { assertSameOrigin, getClientIp } from '@/lib/security'
+import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { mapConfirmationEmailError } from '@/lib/supabase/auth-errors'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
@@ -23,27 +24,38 @@ export async function POST(request: Request) {
   }
 
   const body = payload as { email?: string }
-  const email = typeof body.email === 'string'
-    ? body.email.trim().toLowerCase()
-    : ''
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  if (!email) return buildResponse({ error: 'Email address is required.' }, 400)
 
-  if (!email) {
-    return buildResponse({ error: 'Email address is required.' }, 400)
+  // fail-closed for auth abuse endpoints
+  const ip = getClientIp(request.headers)
+  const emailPreset = authEmailKey(email)
+  const ipPreset = authIpKey(ip)
+  const [emailResult, ipResult] = await Promise.all([
+    consumeDistributedRateLimit(emailPreset.key, emailPreset.limit, emailPreset.windowMs, 1, false),
+    consumeDistributedRateLimit(ipPreset.key, ipPreset.limit, ipPreset.windowMs, 1, false),
+  ])
+
+  const allowed = emailResult.allowed && ipResult.allowed
+  const resetAt = Math.min(emailResult.resetAt, ipResult.resetAt)
+
+  if (!allowed) {
+    const response = buildResponse(
+      { error: 'Too many requests. Please try again later.', resetAt },
+      429
+    )
+    response.headers.set('Retry-After', String(Math.ceil((resetAt - Date.now()) / 1000)))
+    return response
   }
 
   const cookieResponse = NextResponse.next()
   const supabase = await createSupabaseRouteClient(cookieResponse)
-
-  if (!supabase) {
-    return buildResponse({ error: 'Auth configuration missing.' }, 500)
-  }
+  if (!supabase) return buildResponse({ error: 'Auth configuration missing.' }, 500)
 
   const { error } = await supabase.auth.resend({
     type: 'signup',
     email,
-    options: {
-      emailRedirectTo: `${url.origin}/auth/callback`,
-    },
+    options: { emailRedirectTo: `${url.origin}/auth/callback` },
   })
 
   if (error) {

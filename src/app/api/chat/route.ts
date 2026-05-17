@@ -13,7 +13,7 @@ import {
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { publicSessionTokenSchema, uuidSchema, clinicSlugSchema, widgetAccessTokenSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { checkWidgetRateLimit, widgetChatRateKey } from '@/lib/widget/widget-rate-limit'
+import { consumeDistributedRateLimit, widgetChatKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import {
   buildSafeAssistantReply,
@@ -435,10 +435,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Widget access token does not match this clinic.' }, { status: 403 })
       }
 
-      // Rate limit before expensive work
+      // Distributed rate limit before expensive work
       const effectiveVisitorId = visitorId || getClientIp(request.headers)
       const ip = getClientIp(request.headers)
-      const rateLimit = checkWidgetRateLimit(widgetChatRateKey(effectiveVisitorId, ip))
+      const chatPreset = widgetChatKey(effectiveVisitorId, ip)
+      const rateLimit = await consumeDistributedRateLimit(chatPreset.key, chatPreset.limit, chatPreset.windowMs)
       if (!rateLimit.allowed) {
         const response = NextResponse.json(
           { error: 'Too many messages. Please slow down.' },

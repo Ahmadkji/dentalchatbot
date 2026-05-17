@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
-import { checkApiRateLimit, getClientIp } from '@/lib/security'
 
 const devScriptSrc = "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
 const prodScriptSrc = "script-src 'self' 'unsafe-inline'"
@@ -52,21 +51,6 @@ export async function middleware(request: NextRequest) {
   }
 
   const isWidgetFrame = request.nextUrl.pathname.startsWith('/widget-frame')
-
-  // Global API rate limiting (Item 19)
-  if (request.nextUrl.pathname.startsWith('/api/')) {
-    const ip = getClientIp(request.headers)
-    const rateLimit = checkApiRateLimit(ip)
-
-    if (!rateLimit.allowed) {
-      const response = NextResponse.json(
-        { error: 'Too many requests. Please try again later.', resetAt: rateLimit.resetAt },
-        { status: 429 }
-      )
-      response.headers.set('Retry-After', String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)))
-      return applySecurityHeaders(response, isWidgetFrame)
-    }
-  }
 
   const supabaseResponse = await updateSession(request)
 

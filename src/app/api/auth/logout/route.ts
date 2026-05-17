@@ -3,7 +3,7 @@ import { assertSameOrigin } from '@/lib/security'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
 import { requireAuth } from '@/lib/auth-helpers'
-import { unregisterSession } from '@/lib/security'
+import { clearUserSessions } from '@/lib/security'
 
 function buildResponse(body: unknown, status = 200) {
   return setPrivateNoStore(NextResponse.json(body, { status }))
@@ -33,9 +33,9 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Unable to sign out.' }, 500)
   }
 
-  // Unregister session from tracking (Items 24, 26)
+  // Clear in-memory session tracking
   if (user) {
-    unregisterSession(user.id, 'local')
+    clearUserSessions(user.id)
   }
 
   const response = buildResponse({ ok: true }, 200)

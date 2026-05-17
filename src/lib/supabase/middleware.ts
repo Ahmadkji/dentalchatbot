@@ -1,14 +1,15 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
+import { publicEnv } from '@/lib/env/public'
 
-function applyStrictCookieDefaults(
+function applyCookieDefaults(
   options: Parameters<NextResponse['cookies']['set']>[2] | undefined
 ) {
   return {
     ...options,
     httpOnly: true,
-    sameSite: 'strict' as const,
+    sameSite: 'lax' as const,
     secure: options?.secure ?? process.env.NODE_ENV === 'production',
   }
 }
@@ -19,23 +20,29 @@ export async function updateSession(request: NextRequest) {
   })
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    publicEnv.NEXT_PUBLIC_SUPABASE_URL,
+    publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet, headers = {}) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
+
           supabaseResponse = NextResponse.next({
             request,
           })
+
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, applyStrictCookieDefaults(options))
+            supabaseResponse.cookies.set(name, value, applyCookieDefaults(options))
           )
+
+          Object.entries(headers).forEach(([key, value]) => {
+            supabaseResponse.headers.set(key, value)
+          })
         },
       },
     }
@@ -69,7 +76,11 @@ export async function updateSession(request: NextRequest) {
   const isAuthPath = authPaths.includes(pathname) || pathname.startsWith('/auth/')
   let onboardingComplete = false
 
-  if (user) {
+  const needsOnboardingCheck =
+    Boolean(user) &&
+    (isProtectedPath || pathname === '/' || pathname === '/onboarding' || isAuthPath)
+
+  if (needsOnboardingCheck && user) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('onboarding_completed,default_clinic_id')

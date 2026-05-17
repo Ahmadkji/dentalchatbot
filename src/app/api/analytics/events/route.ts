@@ -6,7 +6,7 @@ import { CHAT_SESSION_COOKIE } from '@/lib/chat/session'
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { analyticsEventSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { checkWidgetRateLimit, widgetEventsRateKey } from '@/lib/widget/widget-rate-limit'
+import { consumeDistributedRateLimit, widgetEventsKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import { cookies } from 'next/headers'
 
@@ -45,9 +45,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid or expired widget access token.' }, { status: 401 })
       }
 
-      // Rate limit by visitorId for widget events
+      // Distributed rate limit by visitorId for widget events
       const effectiveVisitorId = visitorId || getClientIp(request.headers)
-      const rateLimit = checkWidgetRateLimit(widgetEventsRateKey(effectiveVisitorId))
+      const eventsPreset = widgetEventsKey(effectiveVisitorId)
+      const rateLimit = await consumeDistributedRateLimit(eventsPreset.key, eventsPreset.limit, eventsPreset.windowMs)
       if (!rateLimit.allowed) {
         return NextResponse.json({ error: 'Too many events.' }, { status: 429 })
       }
@@ -68,9 +69,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Try authenticated path (for non-widget / playground source)
-    const { user, supabase } = await requireAuth()
-    if (user && supabase) {
+    // Non-widget events (dashboard / playground) require authentication
+    if (source !== 'widget') {
+      const { user, supabase, error: authError } = await requireAuth()
+      if (authError) return authError
+      if (!user || !supabase) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+      }
+
       const { getCurrentClinic } = await import('@/lib/clinics/current')
       const current = await getCurrentClinic(supabase, user)
       if (current.clinic) {

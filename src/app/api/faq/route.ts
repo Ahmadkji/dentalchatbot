@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createFaqEntry, listFaqEntriesForClinic } from '@/lib/knowledge/faq'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 export async function GET(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -40,6 +42,15 @@ export async function POST(request: NextRequest) {
     if (!['owner', 'admin'].includes(current.membership.role)) {
       return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `faq-write:${current.clinic.id}:${user.id}:${ip}`,
+      limit: 40,
+      windowMs: 10 * 60 * 1000,
+      failOpen: true,
+    })
+    if (rl) return rl
 
     const body = await request.json().catch(() => null)
     const question = String(body?.question ?? '').trim()

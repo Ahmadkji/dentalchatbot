@@ -1,4 +1,4 @@
-import { after, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import {
@@ -6,10 +6,12 @@ import {
   updateKnowledgeSourceDraft,
 } from '@/lib/knowledge/sources'
 import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 export const maxDuration = 60
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -23,6 +25,15 @@ export async function POST() {
     if (!['owner', 'admin'].includes(current.membership.role)) {
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-refresh:${current.clinic.id}:${ip}`,
+      limit: 8,
+      windowMs: 10 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
 
     const sources = await listKnowledgeSourcesForClinic(supabase, current.clinic.id, { isActive: true })
 

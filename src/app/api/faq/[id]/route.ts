@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { deleteFaqEntry, getFaqEntryForClinic, updateFaqEntry } from '@/lib/knowledge/faq'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 export async function PATCH(
   request: NextRequest,
@@ -20,6 +22,15 @@ export async function PATCH(
     if (!['owner', 'admin'].includes(current.membership.role)) {
       return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `faq-write:${current.clinic.id}:${user.id}:${ip}`,
+      limit: 40,
+      windowMs: 10 * 60 * 1000,
+      failOpen: true,
+    })
+    if (rl) return rl
 
     const { id } = await params
     const existing = await getFaqEntryForClinic(supabase, current.clinic.id, id)
@@ -47,7 +58,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -63,6 +74,15 @@ export async function DELETE(
     if (!['owner', 'admin'].includes(current.membership.role)) {
       return NextResponse.json({ error: 'Only owners and admins can manage FAQs.' }, { status: 403 })
     }
+
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `faq-write:${current.clinic.id}:${user.id}:${ip}`,
+      limit: 40,
+      windowMs: 10 * 60 * 1000,
+      failOpen: true,
+    })
+    if (rl) return rl
 
     const { id } = await params
     const deleted = await deleteFaqEntry(supabase, current.clinic.id, id)

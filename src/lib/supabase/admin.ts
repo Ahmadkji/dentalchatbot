@@ -1,26 +1,18 @@
 import 'server-only'
 
 import { createClient } from '@supabase/supabase-js'
-
-function getAdminConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
-
-  if (!url || !serviceRoleKey) {
-    throw new Error('Supabase admin configuration is missing.')
-  }
-
-  return { url, serviceRoleKey }
-}
+import { serverEnv } from '@/lib/env/server'
 
 export function createSupabaseAdminClient() {
-  const { url, serviceRoleKey } = getAdminConfig()
-
-  return createClient(url, serviceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
+  return createClient(
+    serverEnv.NEXT_PUBLIC_SUPABASE_URL,
+    serverEnv.SUPABASE_SERVICE_ROLE_KEY,
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
     },
-  })
+  )
 }

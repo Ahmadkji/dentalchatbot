@@ -4,6 +4,8 @@ import {
   normalizeKnowledgeJobLimit,
   processQueuedKnowledgeJobs,
 } from '@/lib/knowledge/jobs'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 export const maxDuration = 60
 
@@ -36,6 +38,15 @@ export async function POST(request: NextRequest) {
   if (!isValidKnowledgeRunnerSecret(expectedSecret, candidateSecret)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const ip = getClientIp(request.headers)
+  const rl = await enforceRateLimit({
+    key: `internal-job-run:${ip}`,
+    limit: 20,
+    windowMs: 60 * 1000,
+    failOpen: false,
+  })
+  if (rl) return rl
 
   try {
     const body = await request.json().catch(() => null)

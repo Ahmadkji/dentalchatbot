@@ -4,6 +4,8 @@ import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { listClinicSettings } from '@/lib/clinics/settings'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 const confirmSchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -26,6 +28,15 @@ export async function POST(
   if (!current.clinic) {
     return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
   }
+
+  const ip = getClientIp(request.headers)
+  const rl = await enforceRateLimit({
+    key: `appt-confirm:${current.clinic.id}:${user.id}:${ip}`,
+    limit: 30,
+    windowMs: 5 * 60 * 1000,
+    failOpen: true,
+  })
+  if (rl) return rl
 
   const body = confirmSchema.safeParse(await request.json().catch(() => null))
   if (!body.success) {

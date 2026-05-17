@@ -32,6 +32,7 @@ describe('syncKnowledgeSourceContent', () => {
 
     await syncKnowledgeSourceContent(
       {
+        from: vi.fn(),
         rpc: sourceRpcMock,
       },
       {
