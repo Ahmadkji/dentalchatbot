@@ -6,7 +6,7 @@ import { CHAT_SESSION_COOKIE } from '@/lib/chat/session'
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { publicSessionTokenSchema, uuidSchema, clinicSlugSchema, widgetAccessTokenSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { consumeDistributedRateLimit, widgetAppointmentKey } from '@/lib/rate-limit'
+import { consumeDistributedRateLimit, widgetAppointmentKey, widgetClinicKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import { cookies } from 'next/headers'
 
@@ -113,10 +113,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid or expired widget access token.' }, { status: 401 })
       }
 
-      // Distributed rate limit appointment requests
-      const effectiveVisitorId = visitorId || getClientIp(request.headers)
+      // Distributed rate limit appointment requests (IP-based)
       const ip = getClientIp(request.headers)
-      const apptPreset = widgetAppointmentKey(effectiveVisitorId, ip)
+      const apptPreset = widgetAppointmentKey(ip)
       const rateLimit = await consumeDistributedRateLimit(apptPreset.key, apptPreset.limit, apptPreset.windowMs)
       if (!rateLimit.allowed) {
         return NextResponse.json({ error: 'Too many appointment requests.' }, { status: 429 })
@@ -135,6 +134,18 @@ export async function POST(request: NextRequest) {
       if (slugError || !slugClinic) {
         return NextResponse.json({ error: 'Clinic is unavailable' }, { status: 404 })
       }
+
+      // Per-clinic global cap (checked after slug resolution so we have clinic_id)
+      const clinicCap = widgetClinicKey(slugClinic.clinic_id)
+      const clinicRateLimit = await consumeDistributedRateLimit(clinicCap.key, clinicCap.limit, clinicCap.windowMs)
+      if (!clinicRateLimit.allowed) {
+        console.warn('[appointment-requests:POST] per-clinic rate limit exceeded', {
+          clinicId: slugClinic.clinic_id,
+          remaining: clinicRateLimit.remaining,
+        })
+        return NextResponse.json({ error: 'Too many requests for this clinic.' }, { status: 429 })
+      }
+
       resolvedClinicId = slugClinic.clinic_id
       isPublicPath = true
       isWidgetSlugPath = true

@@ -84,19 +84,25 @@ export function widgetConfigKey(ip: string): { key: string; limit: number; windo
   return { key: `widget-config:${ip}`, limit: 30, windowMs: 60_000 }
 }
 
-/** Widget chat: 20 messages per visitor+IP per minute. */
-export function widgetChatKey(visitorId: string, ip: string): { key: string; limit: number; windowMs: number } {
-  return { key: `widget-chat:${visitorId}:${ip}`, limit: 20, windowMs: 60_000 }
+/** Widget chat: 20 messages per IP per minute. */
+export function widgetChatKey(ip: string): { key: string; limit: number; windowMs: number } {
+  return { key: `widget-chat:${ip}`, limit: 20, windowMs: 60_000 }
 }
 
-/** Widget events: 60 per visitor per minute. */
-export function widgetEventsKey(visitorId: string): { key: string; limit: number; windowMs: number } {
-  return { key: `widget-events:${visitorId}`, limit: 60, windowMs: 60_000 }
+/** Widget events: 60 per IP per minute. */
+export function widgetEventsKey(ip: string): { key: string; limit: number; windowMs: number } {
+  return { key: `widget-events:${ip}`, limit: 60, windowMs: 60_000 }
 }
 
-/** Widget appointments: 5 per visitor+IP per minute. */
-export function widgetAppointmentKey(visitorId: string, ip: string): { key: string; limit: number; windowMs: number } {
-  return { key: `widget-appt:${visitorId}:${ip}`, limit: 5, windowMs: 60_000 }
+/** Widget appointments: 5 per IP per minute. */
+export function widgetAppointmentKey(ip: string): { key: string; limit: number; windowMs: number } {
+  return { key: `widget-appt:${ip}`, limit: 5, windowMs: 60_000 }
+}
+
+/** Per-clinic global widget cap: 600 events per clinic per minute.
+ *  Prevents DB-bloat attacks even if the attacker uses multiple IPs. */
+export function widgetClinicKey(clinicId: string): { key: string; limit: number; windowMs: number } {
+  return { key: `widget-clinic:${clinicId}`, limit: 600, windowMs: 60_000 }
 }
 
 /** Forgot-password email cooldown: 1 per email per 60 seconds. */

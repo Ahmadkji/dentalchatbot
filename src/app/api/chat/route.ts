@@ -16,7 +16,7 @@ import {
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { publicSessionTokenSchema, uuidSchema, clinicSlugSchema, widgetAccessTokenSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken, mintWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { consumeDistributedRateLimit, widgetChatKey } from '@/lib/rate-limit'
+import { consumeDistributedRateLimit, widgetChatKey, widgetClinicKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import {
   buildSafeAssistantReply,
@@ -440,10 +440,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Widget access token does not match this clinic.' }, { status: 403 })
       }
 
-      // Distributed rate limit before expensive work
-      const effectiveVisitorId = visitorId || getClientIp(request.headers)
+      // Distributed rate limit before expensive work (IP-based + per-clinic cap)
       const ip = getClientIp(request.headers)
-      const chatPreset = widgetChatKey(effectiveVisitorId, ip)
+      const chatPreset = widgetChatKey(ip)
       const rateLimit = await consumeDistributedRateLimit(chatPreset.key, chatPreset.limit, chatPreset.windowMs)
       if (!rateLimit.allowed) {
         const response = NextResponse.json(
@@ -453,6 +452,10 @@ export async function POST(request: NextRequest) {
         response.headers.set('Retry-After', String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)))
         return response
       }
+
+      // Per-clinic global cap prevents DB-bloat from multi-IP attacks
+      // Clinic ID is resolved later, so we check after clinic resolution
+      // (see widgetClinicKey check in the clinic resolution block below)
     }
 
     // Build dynamic system prompt with clinic context and knowledge retrieval
@@ -489,6 +492,22 @@ export async function POST(request: NextRequest) {
         { error: 'Widget is unavailable for this clinic.' },
         { status: 404 },
       )
+    }
+
+    // Per-clinic global cap: prevents multi-IP flooding against a single clinic
+    if (isPublicPath && aiProfile?.clinic_id) {
+      const clinicCap = widgetClinicKey(aiProfile.clinic_id)
+      const clinicRateLimit = await consumeDistributedRateLimit(clinicCap.key, clinicCap.limit, clinicCap.windowMs)
+      if (!clinicRateLimit.allowed) {
+        console.warn('[chat:POST] per-clinic rate limit exceeded', {
+          clinicId: aiProfile.clinic_id,
+          remaining: clinicRateLimit.remaining,
+        })
+        return NextResponse.json(
+          { error: 'This clinic is receiving too many requests. Please try again later.' },
+          { status: 429 },
+        )
+      }
     }
 
     const billingStatus = aiProfile?.clinic_id

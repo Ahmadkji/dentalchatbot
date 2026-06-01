@@ -1,5 +1,13 @@
 # Findings
 
+## 2026-06-01 — Widget/Session/Rate-Limit/UI Sync Analysis
+
+- Confirmed real issues in the current codebase: public widget session/token persistence in browser storage, client-controlled visitor IDs inside public rate-limit keys, raw first-hop `X-Forwarded-For` IP parsing, stale retention of public conversations, and mostly isolated client state that requires manual refetch or focus-based refresh.
+- Confirmed false positives or overstated claims: the widget access token is intentionally short-lived bearer-style by design, the internal knowledge job route is already protected by a shared secret/bearer check, the embedding pipeline is active, and the prior deploy-blocker claim is not relevant to this Vercel-hosted app.
+- The fix surface is shared: `src/app/api/widget/config/route.ts`, `src/app/api/chat/route.ts`, `src/app/api/analytics/events/route.ts`, `src/app/api/appointment-requests/route.ts`, `src/lib/rate-limit.ts`, `src/lib/security.ts`, `src/lib/chat/public-widget-session.ts`, `public/widget.js`, and dashboard refresh/state helpers.
+- The dashboard currently relies on local component state plus ad hoc refetches; there is no shared query cache layer, so several pages will not update automatically unless their specific refetch path runs.
+- Need official docs coverage for Next.js route handlers, middleware/caching/instrumentation, React state/effects/data-sharing guidance, and Supabase RLS/service-role/cron behavior before recommending a permanent design.
+
 ## 2026-05-27 — Bot Setup Analysis
 
 - Repository is currently in a heavily dirty state with many modified and untracked files, so dependency analysis must rely on present working tree (not last clean commit).

@@ -1,5 +1,11 @@
 # Progress
 
+## Session Log — 2026-06-01
+
+- Re-scoped the analysis from bot setup in general to the specific non-payment issues in widget/session/rate-limit/security/UI sync.
+- Refreshing planning artifacts before deeper evidence gathering so the current task is tracked on disk, not just in chat.
+- Next: collect exact line references from the affected routes, libs, and components; then pull official docs for the recommended fix paths.
+
 ## Session Log — 2026-05-27
 
 - Re-scoped planning artifacts to this task: complete bot setup dependency analysis.

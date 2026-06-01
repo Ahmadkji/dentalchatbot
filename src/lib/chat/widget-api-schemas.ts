@@ -10,6 +10,49 @@
 
 import { z } from 'zod'
 
+/** Maximum serialized size of analytics metadata (1 KB). */
+const MAX_METADATA_BYTES = 1024
+
+/** Maximum number of top-level keys in metadata. */
+const MAX_METADATA_KEYS = 20
+
+/**
+ * Sanitize and cap analytics metadata before DB storage.
+ * Rejects payloads that are too large or have too many keys.
+ */
+function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const keys = Object.keys(metadata)
+  if (keys.length > MAX_METADATA_KEYS) {
+    throw new Error(`Metadata exceeds maximum of ${MAX_METADATA_KEYS} keys`)
+  }
+
+  const serialized = JSON.stringify(metadata)
+  if (serialized.length > MAX_METADATA_BYTES) {
+    throw new Error(`Metadata exceeds maximum size of ${MAX_METADATA_BYTES} bytes`)
+  }
+
+  return metadata
+}
+
+const metadataSchema = z
+  .record(z.string().max(64), z.unknown())
+  .optional()
+  .nullable()
+  .refine(
+    (val) => {
+      if (!val) return true
+      return Object.keys(val).length <= MAX_METADATA_KEYS
+    },
+    { message: `Metadata exceeds maximum of ${MAX_METADATA_KEYS} keys` },
+  )
+  .refine(
+    (val) => {
+      if (!val) return true
+      return JSON.stringify(val).length <= MAX_METADATA_BYTES
+    },
+    { message: `Metadata exceeds maximum size of ${MAX_METADATA_BYTES} bytes` },
+  )
+
 export const widgetAccessTokenSchema = z
   .string()
   .min(1, 'Widget access token is required')
@@ -94,7 +137,7 @@ export const analyticsEventSchema = z.object({
   widgetAccessToken: widgetAccessTokenSchema.optional().nullable(),
   visitorId: visitorIdSchema.optional().nullable(),
   service: z.string().max(200).optional().nullable(),
-  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
+  metadata: metadataSchema,
 })
 
 /**

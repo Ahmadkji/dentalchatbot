@@ -240,6 +240,24 @@ export function assertSameOrigin(originHeader: string | null | undefined, nextUr
 }
 
 export function getClientIp(headers: Headers): string {
+  // Vercel sets x-vercel-forwarded-for with the true client IP and
+  // overwrites x-forwarded-for to prevent spoofing.  When running
+  // behind an additional CDN (Cloudflare, etc.), x-vercel-forwarded-for
+  // preserves the original value.
+  // Ref: https://vercel.com/docs/headers/request-headers
+  const vercelForwarded = headers.get('x-vercel-forwarded-for')
+  if (vercelForwarded) {
+    const firstIp = vercelForwarded
+      .split(',')
+      .map((part) => part.trim())
+      .find(Boolean)
+
+    if (firstIp) {
+      console.info('[security:getClientIp] resolved from x-vercel-forwarded-for', { ip: firstIp })
+      return firstIp
+    }
+  }
+
   const xForwardedFor = headers.get('x-forwarded-for')
   if (xForwardedFor) {
     const firstIp = xForwardedFor
@@ -260,5 +278,6 @@ export function getClientIp(headers: Headers): string {
     }
   }
 
+  console.warn('[security:getClientIp] no IP headers found, returning unknown')
   return 'unknown'
 }

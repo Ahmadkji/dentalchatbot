@@ -6,7 +6,7 @@ import { CHAT_SESSION_COOKIE } from '@/lib/chat/session'
 import { validatePublicSessionToken, validateCookieTokenFallback, extendTokenExpiry } from '@/lib/chat/public-widget-session'
 import { analyticsEventSchema } from '@/lib/chat/widget-api-schemas'
 import { verifyWidgetAccessToken } from '@/lib/widget/widget-access-token'
-import { consumeDistributedRateLimit, widgetEventsKey } from '@/lib/rate-limit'
+import { consumeDistributedRateLimit, widgetEventsKey, widgetClinicKey } from '@/lib/rate-limit'
 import { getClientIp } from '@/lib/security'
 import { cookies } from 'next/headers'
 
@@ -45,9 +45,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid or expired widget access token.' }, { status: 401 })
       }
 
-      // Distributed rate limit by visitorId for widget events
-      const effectiveVisitorId = visitorId || getClientIp(request.headers)
-      const eventsPreset = widgetEventsKey(effectiveVisitorId)
+      // Distributed rate limit by IP for widget events
+      const ip = getClientIp(request.headers)
+      const eventsPreset = widgetEventsKey(ip)
       const rateLimit = await consumeDistributedRateLimit(eventsPreset.key, eventsPreset.limit, eventsPreset.windowMs)
       if (!rateLimit.allowed) {
         return NextResponse.json({ error: 'Too many events.' }, { status: 429 })
@@ -154,6 +154,19 @@ export async function POST(request: NextRequest) {
 
     if (!clinicId) {
       return NextResponse.json({ error: 'Cannot resolve clinic context' }, { status: 400 })
+    }
+
+    // Per-clinic global cap: prevents multi-IP flooding
+    if (source === 'widget' && clinicId) {
+      const clinicCap = widgetClinicKey(clinicId)
+      const clinicRateLimit = await consumeDistributedRateLimit(clinicCap.key, clinicCap.limit, clinicCap.windowMs)
+      if (!clinicRateLimit.allowed) {
+        console.warn('[analytics:POST] per-clinic rate limit exceeded', {
+          clinicId,
+          remaining: clinicRateLimit.remaining,
+        })
+        return NextResponse.json({ error: 'Too many events for this clinic.' }, { status: 429 })
+      }
     }
 
     // For widget-sourced events without a conversation, verify the clinic

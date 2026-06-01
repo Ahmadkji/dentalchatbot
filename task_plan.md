@@ -1,24 +1,26 @@
 # Task Plan
 
 ## Goal
-Produce a complete dependency analysis of bot setup so we can verify every function is correctly connected across UI/UX, API, business logic, database schema, RLS, and migrations.
+Produce a professional root-cause and fix analysis for the non-payment issues in the widget/session/rate-limit/UI-sync stack, backed by code references and official docs, then choose the safest permanent fix.
 
 ## Scope
-- Analyze current implementation only (no feature changes unless requested later).
-- Trace function-to-function, route-to-lib, and UI-to-data flows.
-- Identify missing links, stale contracts, and high-risk edge cases.
+- Analyze current implementation and relevant official docs.
+- Trace function-to-function, route-to-lib, UI-to-data, and DB/RLS flows for the widget, chat, analytics, appointment, clinic, settings, and dashboard refresh paths.
+- Identify root causes, false positives, permanent fixes, and regression risks.
 
 ## Phases
-1. File inventory and ownership map for bot setup paths (frontend, backend, DB).
-2. Backend dependency trace (API routes, auth checks, lib modules, shared helpers).
-3. Frontend dependency trace (pages/components/hooks/state to API contracts).
-4. Database and schema trace (tables, constraints, RLS, migrations, background jobs).
-5. Scenario matrix + risk analysis + prioritized action plan.
+1. Evidence collection: file inventory, exact line references, and official docs.
+2. Root-cause map: backend, frontend, DB, RLS, token/session, rate-limit, and logging paths.
+3. Option analysis: 3-4 fixes with security, scalability, reversibility, and maintenance tradeoffs.
+4. Recommendation: choose the safest permanent fix and document impact on other flows.
+5. Verification: testing plan, regression surface, and rollout/rollback notes.
 
 ## Checklist
-- [ ] Inventory all relevant files complete
+- [ ] Relevant files and exact line references captured
 - [ ] Function call graph mapped
 - [ ] API request/response contracts mapped
 - [ ] DB schema + RLS + migration links mapped
-- [ ] Failure modes and edge cases reviewed
+- [ ] Official docs gathered and cited
+- [ ] Failure modes, regressions, and UI sync risks reviewed
+- [ ] Candidate solutions compared
 - [ ] Final verdict and next steps drafted
