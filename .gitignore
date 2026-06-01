@@ -56,3 +56,7 @@ server.log
 
 # Screenshots
 step*.png
+
+# Local Supabase CLI binaries
+bin/supabase
+bin/supabase-broken
