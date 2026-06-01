@@ -41,7 +41,10 @@ export function ForgotPasswordForm() {
       }
 
       setSubmitted(true)
-    } catch {
+    } catch (error) {
+      console.error('[ForgotPasswordForm] Network error during password reset request', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       setError('Network error. Please check your connection and try again.')
     } finally {
       setPending(false)

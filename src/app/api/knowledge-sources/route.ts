@@ -8,8 +8,12 @@ import {
   listKnowledgeSourcesForClinic,
   mapKnowledgeSource,
   validateManualKnowledgeContent,
+  getActiveKnowledgeSourceCount,
+  MAX_KNOWLEDGE_SOURCES_PER_CLINIC,
 } from '@/lib/knowledge/sources'
 import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 function mapUiTypeToSourceType(value: string | null): KnowledgeSourceType | null {
   if (value === 'manual_text') return 'manual_text'
@@ -42,15 +46,23 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const isActiveParam = searchParams.get('is_active')
 
-    const sources = await listKnowledgeSourcesForClinic(supabase, clinic.id, {
+    const result = await listKnowledgeSourcesForClinic(supabase, clinic.id, {
       sourceType: type,
       status: isKnowledgeStatus(status) ? status : null,
       isActive:
         isActiveParam === null ? null : isActiveParam === 'true' ? true : isActiveParam === 'false' ? false : null,
     })
-    return NextResponse.json(sources.map(mapKnowledgeSource))
+    return NextResponse.json({
+      sources: result.sources.map(mapKnowledgeSource),
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+    })
   } catch (error) {
-    console.error('Error fetching knowledge sources:', error)
+    console.error('[knowledge-sources:GET] Failed to fetch knowledge sources', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch knowledge sources' }, { status: 500 })
   }
 }
@@ -70,6 +82,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
 
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-source-create:${current.clinic.id}:${ip}`,
+      limit: 20,
+      windowMs: 10 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
+
     const body = await request.json().catch(() => null)
     const title = String(body?.title ?? '').trim()
     const content = String(body?.content ?? '').trim()
@@ -83,6 +104,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Manual knowledge should include enough detail to train useful answers.' },
         { status: 400 },
+      )
+    }
+
+    const activeCount = await getActiveKnowledgeSourceCount(supabase, current.clinic.id)
+    if (activeCount >= MAX_KNOWLEDGE_SOURCES_PER_CLINIC) {
+      return NextResponse.json(
+        { error: `You have reached the maximum of ${MAX_KNOWLEDGE_SOURCES_PER_CLINIC} knowledge sources. Please delete some before adding new ones.` },
+        { status: 429 },
       )
     }
 
@@ -104,11 +133,19 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-knowledge-post' }).catch(() => {}))
+    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-knowledge-post' }).catch((bgError) => {
+      console.error('[knowledge-sources:POST] Background job processing failed', {
+        runner: 'api-knowledge-post',
+        error: bgError instanceof Error ? bgError.message : String(bgError),
+      })
+    }))
 
     return NextResponse.json(created ? mapKnowledgeSource(created) : null, { status: 202 })
   } catch (error) {
-    console.error('Error creating knowledge source:', error)
+    console.error('[knowledge-sources:POST] Failed to create knowledge source', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to create knowledge source' }, { status: 500 })
   }
 }

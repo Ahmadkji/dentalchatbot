@@ -1,10 +1,3 @@
-declare const Deno: {
-  env: {
-    get(name: string): string | undefined
-  }
-  serve(handler: (request: Request) => Response | Promise<Response>): void
-}
-
 const runnerUrl = Deno.env.get('KNOWLEDGE_JOB_RUNNER_URL')?.trim() ?? ''
 const runnerSecret = Deno.env.get('KNOWLEDGE_JOB_RUNNER_SECRET')?.trim() ?? ''
 const dispatcherSecret = Deno.env.get('KNOWLEDGE_DISPATCHER_SECRET')?.trim() ?? ''
@@ -31,6 +24,21 @@ function readSecret(request: Request) {
   return null
 }
 
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  const encoder = new TextEncoder()
+  const aBytes = encoder.encode(a)
+  const bBytes = encoder.encode(b)
+
+  if (aBytes.length !== bBytes.length) return false
+
+  let diff = 0
+  for (let i = 0; i < aBytes.length; i += 1) {
+    diff |= aBytes[i] ^ bBytes[i]
+  }
+
+  return diff === 0
+}
+
 Deno.serve(async (request) => {
   if (request.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405)
@@ -41,7 +49,7 @@ Deno.serve(async (request) => {
   }
 
   const incomingSecret = readSecret(request)
-  if (!incomingSecret || incomingSecret !== dispatcherSecret) {
+  if (!incomingSecret || !timingSafeEqualStrings(incomingSecret, dispatcherSecret)) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -67,11 +75,8 @@ Deno.serve(async (request) => {
       },
     })
   } catch (error) {
-    return json(
-      {
-        error: error instanceof Error ? error.message : 'Failed to dispatch knowledge jobs.',
-      },
-      500,
-    )
+    const message = error instanceof Error ? error.message : 'Failed to dispatch knowledge jobs.'
+    console.error('[knowledge-dispatcher] Dispatch failed', { error: message })
+    return json({ error: message }, 500)
   }
 })

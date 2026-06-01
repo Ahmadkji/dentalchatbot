@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -23,7 +24,8 @@ import {
   ArrowUpDown,
   Trophy,
 } from 'lucide-react'
-import { useAppStore } from '@/lib/store'
+import { useRouter } from 'next/navigation'
+import { dashboardRoutes } from '@/lib/dashboard-routes'
 
 interface DashboardStats {
   totalConversations: number
@@ -120,19 +122,19 @@ function RowStatus({ value }: { value: string }) {
 }
 
 const cardNavTargets: Record<string, string> = {
-  'Total Conversations': 'conversations',
-  'Lead Capture Rate': 'leads',
-  'Resolution Rate': 'conversations',
-  'Helpful Score': 'conversations',
-  'Knowledge Sources': 'knowledge-base',
-  'Indexed Chunks': 'knowledge-base',
-  'WhatsApp Clicks (Today)': 'customizations',
-  'After-Hours Leads': 'leads',
-  'Unanswered Questions': 'unanswered-questions',
+  'Total Conversations': dashboardRoutes.inbox,
+  'Lead Capture Rate': dashboardRoutes.leads,
+  'Resolution Rate': dashboardRoutes.inbox,
+  'Helpful Score': dashboardRoutes.inbox,
+  'Knowledge Sources': dashboardRoutes.knowledge,
+  'Indexed Chunks': dashboardRoutes.knowledge,
+  'WhatsApp Clicks (Today)': dashboardRoutes.customizations,
+  'After-Hours Leads': dashboardRoutes.leads,
+  'Unanswered Questions': dashboardRoutes.unanswered,
 }
 
 export default function DashboardPage() {
-  const { setActivePage } = useAppStore()
+  const router = useRouter()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [conversations, setConversations] = useState<ConversationRow[]>([])
   const [leads, setLeads] = useState<LeadRow[]>([])
@@ -140,34 +142,47 @@ export default function DashboardPage() {
   const [topServices, setTopServices] = useState<TopServiceRow[]>([])
   const [unansweredPreview, setUnansweredPreview] = useState<UnansweredPreviewRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const loadDashboard = async () => {
+    // Only show full-page skeletons on first load or after error cleared data.
+    // Background re-fetches (e.g. tab focus) keep existing data visible —
+    // same pattern as SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+    if (stats === null) setLoading(true)
+    setLoadError(null)
+    try {
+      const res = await fetch('/api/dashboard')
+      if (!res.ok) throw new Error('Failed to load dashboard')
+      const data = await res.json()
+      setStats(data.stats || null)
+      setConversations(data.recentConversations || [])
+      setLeads(data.recentLeads || [])
+      setSources(data.sourceHealth || [])
+      setTopServices(data.topServicesAsked || [])
+      setUnansweredPreview(data.unansweredPreview || [])
+    } catch (error) {
+      console.error('[DashboardPage] Failed to load dashboard data', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      setLoadError('Failed to load dashboard data.')
+      setStats(null)
+      setConversations([])
+      setLeads([])
+      setSources([])
+      setTopServices([])
+      setUnansweredPreview([])
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const res = await fetch('/api/dashboard')
-        if (!res.ok) throw new Error('Failed to load dashboard')
-        const data = await res.json()
-        setStats(data.stats || null)
-        setConversations(data.recentConversations || [])
-        setLeads(data.recentLeads || [])
-        setSources(data.sourceHealth || [])
-        setTopServices(data.topServicesAsked || [])
-        setUnansweredPreview(data.unansweredPreview || [])
-      } catch {
-        setStats(null)
-        setConversations([])
-        setLeads([])
-        setSources([])
-        setTopServices([])
-        setUnansweredPreview([])
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    void load()
+    void loadDashboard()
   }, [])
+
+  // Re-fetch dashboard data when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  useRefetchOnFocus(loadDashboard)
 
   const pillTone: Record<string, string> = {
     emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200/60',
@@ -260,6 +275,20 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 md:space-y-7">
+      {loadError && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-amber-900">Failed to load dashboard data.</p>
+              <p className="text-xs text-amber-800/80">Try again to refresh the dashboard from the server.</p>
+            </div>
+            <Button variant="outline" size="sm" className="border-amber-200 bg-white" onClick={() => void loadDashboard()}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      )}
+
       <section className="rounded-lg border bg-white overflow-hidden">
         <div className="px-4 py-3 border-b bg-slate-50/80">
           <h2 className="text-sm font-semibold text-slate-700">Key Performance Indicators</h2>
@@ -292,7 +321,7 @@ export default function DashboardPage() {
                   <TableRow
                     key={card.label}
                     className="group cursor-pointer hover:bg-emerald-50/40 transition-colors"
-                    onClick={() => setActivePage((cardNavTargets[card.label] as any) || 'dashboard')}
+                    onClick={() => router.push((cardNavTargets[card.label]) || '/dashboard')}
                   >
                     <TableCell>
                       <div className="flex size-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-100 transition-colors">
@@ -354,7 +383,7 @@ export default function DashboardPage() {
                   const pct = Math.round((row.count / maxCount) * 100)
                   const medalColor = idx === 0 ? 'text-amber-500' : idx === 1 ? 'text-slate-400' : idx === 2 ? 'text-orange-400' : 'text-slate-300'
                   return (
-                    <TableRow key={row.service} className="group cursor-pointer hover:bg-emerald-50/40 transition-colors" onClick={() => setActivePage('conversations')}>
+                    <TableRow key={row.service} className="group cursor-pointer hover:bg-emerald-50/40 transition-colors" onClick={() => router.push(dashboardRoutes.inbox)}>
                       <TableCell className="text-center">
                         <span className={`text-xs font-bold ${medalColor}`}>{idx + 1}</span>
                       </TableCell>
@@ -391,7 +420,7 @@ export default function DashboardPage() {
       <section className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Conversation Quality Queue</h2>
-          <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => setActivePage('conversations')}>
+          <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => router.push(dashboardRoutes.inbox)}>
             Open Inbox
           </Button>
         </div>
@@ -421,7 +450,7 @@ export default function DashboardPage() {
                   <TableRow
                     key={row.id}
                     className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
-                    onClick={() => setActivePage('conversations')}
+                    onClick={() => router.push(dashboardRoutes.inbox)}
                   >
                     <TableCell className="max-w-[180px] font-medium whitespace-normal break-words">
                       <div>{row.visitorName}</div>
@@ -451,7 +480,7 @@ export default function DashboardPage() {
       <section className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Bot Could Not Answer</h2>
-          <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => setActivePage('unanswered-questions')}>
+          <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => router.push(dashboardRoutes.unanswered)}>
             Open Inbox
           </Button>
         </div>
@@ -478,7 +507,7 @@ export default function DashboardPage() {
                   <TableRow
                     key={row.id}
                     className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
-                    onClick={() => setActivePage('unanswered-questions')}
+                    onClick={() => router.push(dashboardRoutes.unanswered)}
                   >
                     <TableCell className="max-w-[220px] font-medium whitespace-normal break-words">{row.question}</TableCell>
                     <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{row.sourcePage || '—'}</TableCell>
@@ -499,7 +528,7 @@ export default function DashboardPage() {
         <div className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-sm font-medium text-muted-foreground">Lead Pipeline</h2>
-            <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => setActivePage('leads')}>
+            <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => router.push(dashboardRoutes.leads)}>
               View Leads
             </Button>
           </div>
@@ -527,7 +556,7 @@ export default function DashboardPage() {
                     <TableRow
                       key={lead.id}
                       className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
-                      onClick={() => setActivePage('leads')}
+                      onClick={() => router.push(dashboardRoutes.leads)}
                     >
                       <TableCell className="max-w-[170px] font-medium whitespace-normal break-words">{lead.name}</TableCell>
                       <TableCell><RowStatus value={lead.status} /></TableCell>
@@ -550,7 +579,7 @@ export default function DashboardPage() {
         <div className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-sm font-medium text-muted-foreground">Knowledge Source Health</h2>
-            <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => setActivePage('knowledge-base')}>
+            <Button variant="ghost" size="sm" className="h-8 w-full text-xs sm:h-7 sm:w-auto" onClick={() => router.push(dashboardRoutes.knowledge)}>
               Manage Sources
             </Button>
           </div>
@@ -578,7 +607,7 @@ export default function DashboardPage() {
                     <TableRow
                       key={source.id}
                       className="cursor-pointer hover:bg-emerald-50/40 transition-colors"
-                      onClick={() => setActivePage('knowledge-base')}
+                      onClick={() => router.push(dashboardRoutes.knowledge)}
                     >
                       <TableCell className="max-w-[180px] font-medium whitespace-normal break-words">{source.title}</TableCell>
                       <TableCell className="hidden sm:table-cell uppercase text-xs text-muted-foreground">{source.type.replace('_', ' ')}</TableCell>
@@ -608,8 +637,8 @@ export default function DashboardPage() {
           Train from clinic content, monitor conversations, capture appointment-intent leads, and improve quality with helpful/not-helpful feedback.
         </p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <Button size="sm" className="w-full sm:w-auto" onClick={() => setActivePage('clinic-profile')}>Configure Bot Setup</Button>
-          <Button size="sm" className="w-full sm:w-auto" variant="outline" onClick={() => setActivePage('widget-install')}>Customize Widget</Button>
+          <Button size="sm" className="w-full sm:w-auto" onClick={() => router.push(dashboardRoutes.botSetup)}>Configure Bot Setup</Button>
+          <Button size="sm" className="w-full sm:w-auto" variant="outline" onClick={() => router.push(dashboardRoutes.widget)}>Customize Widget</Button>
         </div>
       </section>
     </div>

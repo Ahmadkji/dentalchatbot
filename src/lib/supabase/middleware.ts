@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
+import { applySecurityHeaders } from '@/lib/security-headers'
 import { publicEnv } from '@/lib/env/public'
 
 function applyCookieDefaults(
@@ -14,9 +15,18 @@ function applyCookieDefaults(
   }
 }
 
-export async function updateSession(request: NextRequest) {
+function withNonceHeaders(request: NextRequest, nonce?: string) {
+  const headers = new Headers(request.headers)
+  if (nonce) {
+    headers.set('x-nonce', nonce)
+  }
+  return headers
+}
+
+export async function updateSession(request: NextRequest, nonce?: string) {
+  const requestHeaders = withNonceHeaders(request, nonce)
   let supabaseResponse = NextResponse.next({
-    request,
+    request: { headers: requestHeaders },
   })
 
   const supabase = createServerClient(
@@ -33,7 +43,7 @@ export async function updateSession(request: NextRequest) {
           )
 
           supabaseResponse = NextResponse.next({
-            request,
+            request: { headers: requestHeaders },
           })
 
           cookiesToSet.forEach(({ name, value, options }) =>
@@ -48,15 +58,40 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // IMPORTANT: Avoid writing any logic between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // Use getClaims() instead of getUser() for faster JWT validation.
+  // getUser() contacts the Auth server on every call (~50-200ms latency).
+  // getClaims() validates the JWT locally using cached JWKS (asymmetric keys)
+  // or falls back to Auth server (symmetric keys) — same security, faster.
+  // API routes still use getUser() via requireAuth() for fresh user records.
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  let userId: string | null = null
+  try {
+    const { data, error: claimsError } = await supabase.auth.getClaims()
+    if (claimsError) {
+      console.warn('[middleware:getClaims] JWT validation failed', {
+        pathname: request.nextUrl.pathname,
+        errorMessage: claimsError.message,
+        errorCode: claimsError.status ?? null,
+      })
+      // Continue without user — protected routes will redirect to login
+    } else if (data?.claims?.sub) {
+      userId = data.claims.sub
+    } else {
+      console.warn('[middleware:getClaims] No sub claim in JWT', {
+        pathname: request.nextUrl.pathname,
+        hasClaims: Boolean(data?.claims),
+      })
+    }
+  } catch (error) {
+    console.error('[middleware:getClaims] Unexpected error during JWT validation', {
+      pathname: request.nextUrl.pathname,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    // Continue without user — protected routes will redirect to login
+  }
 
   const pathname = request.nextUrl.pathname
+  const isWidgetFrame = pathname.startsWith('/widget-frame')
   const authPaths = [
     '/',
     '/login',
@@ -77,37 +112,67 @@ export async function updateSession(request: NextRequest) {
   let onboardingComplete = false
 
   const needsOnboardingCheck =
-    Boolean(user) &&
+    Boolean(userId) &&
     (isProtectedPath || pathname === '/' || pathname === '/onboarding' || isAuthPath)
 
-  if (needsOnboardingCheck && user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('onboarding_completed,default_clinic_id')
-      .eq('id', user.id)
-      .maybeSingle()
+  if (needsOnboardingCheck && userId) {
+    try {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('onboarding_completed,default_clinic_id')
+        .eq('id', userId)
+        .maybeSingle()
 
-    onboardingComplete = Boolean(profile?.onboarding_completed && profile.default_clinic_id)
+      if (profileError) {
+        console.error('[middleware:profile] Failed to fetch user profile', {
+          pathname: request.nextUrl.pathname,
+          error: profileError.message,
+        })
+        // Don't lock out user — treat as onboarding complete so they can access dashboard
+        onboardingComplete = true
+      } else {
+        onboardingComplete = Boolean(profile?.onboarding_completed && profile.default_clinic_id)
+      }
+    } catch (error) {
+      console.error('[middleware:profile] Profile query threw unexpectedly', {
+        pathname: request.nextUrl.pathname,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // Graceful: treat as onboarding complete to avoid locking out users
+      onboardingComplete = true
+    }
   }
 
-  if (!user && isProtectedPath) {
+  if (!userId && isProtectedPath) {
     const response = NextResponse.redirect(new URL('/login', request.url))
-    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+    return copyResponseCookies(
+      supabaseResponse,
+      applySecurityHeaders(setPrivateNoStore(response), isWidgetFrame, nonce)
+    )
   }
 
-  if (user && isProtectedPath && pathname !== '/onboarding' && !onboardingComplete) {
+  if (userId && isProtectedPath && pathname !== '/onboarding' && !onboardingComplete) {
     const response = NextResponse.redirect(new URL('/onboarding', request.url))
-    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+    return copyResponseCookies(
+      supabaseResponse,
+      applySecurityHeaders(setPrivateNoStore(response), isWidgetFrame, nonce)
+    )
   }
 
-  if (user && pathname === '/onboarding' && onboardingComplete) {
+  if (userId && pathname === '/onboarding' && onboardingComplete) {
     const response = NextResponse.redirect(new URL('/dashboard', request.url))
-    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+    return copyResponseCookies(
+      supabaseResponse,
+      applySecurityHeaders(setPrivateNoStore(response), isWidgetFrame, nonce)
+    )
   }
 
-  if (user && (pathname === '/' || isAuthPath)) {
+  if (userId && (pathname === '/' || isAuthPath)) {
     const response = NextResponse.redirect(new URL(onboardingComplete ? '/dashboard' : '/onboarding', request.url))
-    return copyResponseCookies(supabaseResponse, setPrivateNoStore(response))
+    return copyResponseCookies(
+      supabaseResponse,
+      applySecurityHeaders(setPrivateNoStore(response), isWidgetFrame, nonce)
+    )
   }
 
   // IMPORTANT: You *must* return the supabaseResponse object as it is.
@@ -123,7 +188,7 @@ export async function updateSession(request: NextRequest) {
   // If this is not done, you may cause the browser and server to go out of sync
   // and terminate the user's session prematurely!
   if (isProtectedPath || isAuthPath) {
-    return setPrivateNoStore(supabaseResponse)
+    return applySecurityHeaders(setPrivateNoStore(supabaseResponse), isWidgetFrame, nonce)
   }
 
   return supabaseResponse

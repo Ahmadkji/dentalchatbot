@@ -15,9 +15,9 @@ export async function PATCH(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
-    const { id } = await params
     const { clinic } = await getCurrentClinic(supabase, user)
     if (!clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
@@ -45,7 +45,13 @@ export async function PATCH(
       }
       data.intent = normalized
     }
-    if (body.sortOrder !== undefined) data.sort_order = Number(body.sortOrder) || 99
+    if (body.sortOrder !== undefined) {
+      const parsedSortOrder = Number(body.sortOrder)
+      const normalized = Number.isFinite(parsedSortOrder)
+        ? Math.max(1, Math.floor(parsedSortOrder))
+        : 99
+      data.sort_order = normalized
+    }
     if (body.isActive !== undefined) data.is_active = Boolean(body.isActive)
 
     const { data: updated, error } = await supabase
@@ -63,7 +69,11 @@ export async function PATCH(
     const promptOptions = { whatsapp: clinic.whatsapp || null }
     return NextResponse.json(mapWidgetQuickPromptRow(updated as QuickPromptRow, promptOptions))
   } catch (error) {
-    console.error('Error updating quick prompt:', error)
+    console.error('[quick-prompts:PATCH] Failed to update quick prompt', {
+      promptId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update quick prompt' }, { status: 500 })
   }
 }
@@ -75,9 +85,9 @@ export async function DELETE(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
-    const { id } = await params
     const { clinic } = await getCurrentClinic(supabase, user)
     if (!clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
@@ -106,7 +116,11 @@ export async function DELETE(
 
     return NextResponse.json({ message: 'Quick prompt deleted successfully' })
   } catch (error) {
-    console.error('Error deleting quick prompt:', error)
+    console.error('[quick-prompts:DELETE] Failed to delete quick prompt', {
+      promptId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to delete quick prompt' }, { status: 500 })
   }
 }

@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     if (rl) return rl
 
     const body = await request.json().catch(() => null)
-    const websiteUrl = String(body?.url ?? '').trim()
+    const websiteUrl = String(body?.url ?? body?.website_url ?? '').trim()
     if (!websiteUrl) {
       return NextResponse.json({ error: 'Website URL is required' }, { status: 400 })
     }
@@ -40,16 +40,15 @@ export async function POST(request: NextRequest) {
       current.clinic.id,
       user.id,
       websiteUrl,
+      { defaultCountry: current.clinic.country ?? null },
     )
 
-    return NextResponse.json({
-      sessionId: created.session.id,
-      url: created.session.websiteUrl,
-      contentPreview: created.contentPreview,
-      details: created.session.detectedFields,
-    })
+    return NextResponse.json(created)
   } catch (error) {
-    console.error('Error fetching clinic details from website:', error)
+    console.error('[clinic:fetch-from-website] Failed to fetch clinic details from website', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch website content. Please check the URL and try again.' },
       { status: 500 },

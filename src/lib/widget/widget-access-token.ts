@@ -129,7 +129,10 @@ export function verifyWidgetAccessToken(token: string): VerifiedWidgetAccess | n
   try {
     const payloadJson = base64UrlDecode(payloadEncoded)
     payload = JSON.parse(payloadJson)
-  } catch {
+  } catch (decodeError) {
+    console.warn('[widget-token] Failed to decode access token payload', {
+      error: decodeError instanceof Error ? decodeError.message : String(decodeError),
+    })
     return null
   }
 

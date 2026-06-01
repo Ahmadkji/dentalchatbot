@@ -165,7 +165,11 @@ function LoginForm({ initialMode: propInitialMode }: LoginFormProps) {
 
       router.push(data.next ?? nextPath)
       router.refresh()
-    } catch {
+    } catch (error) {
+      console.error('[LoginForm] Network error during authentication', {
+        mode,
+        error: error instanceof Error ? error.message : String(error),
+      })
       setError('Network error. Please check your connection and try again.')
     } finally {
       setPending(false)

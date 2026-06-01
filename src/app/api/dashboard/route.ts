@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { mapLeadRows } from '@/lib/leads/lead-contract'
 
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10
@@ -175,7 +176,8 @@ export async function GET(request: NextRequest) {
         .select('*')
         .eq('clinic_id', clinicId)
         .eq('status', 'open')
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(5),
       supabase
         .from('knowledge_sources')
         .select('id,status,is_active')
@@ -216,14 +218,7 @@ export async function GET(request: NextRequest) {
       updatedAt: conv.updated_at,
     }))
 
-    const flattenedLeads = (recentLeads.data ?? []).map((lead) => ({
-      id: lead.id,
-      name: lead.name,
-      status: lead.status,
-      preferredContact: lead.preferred_contact,
-      source: lead.source,
-      createdAt: lead.created_at,
-    }))
+    const flattenedLeads = mapLeadRows(recentLeads.data ?? [])
 
     const sourceHealth = ((sourceHealthRows.data ?? []) as SourceHealthRow[]).slice(0, 8).map((source) => ({
       id: source.id,
@@ -280,7 +275,10 @@ export async function GET(request: NextRequest) {
       topServicesAsked,
     })
   } catch (error) {
-    console.error('Error fetching dashboard analytics:', error)
+    console.error('[dashboard:GET] Failed to fetch dashboard analytics', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch dashboard analytics' }, { status: 500 })
   }
 }

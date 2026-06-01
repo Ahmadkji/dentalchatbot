@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
-import { createKnowledgeSourceDraft, mapKnowledgeSource } from '@/lib/knowledge/sources'
+import { createKnowledgeSourceDraft, mapKnowledgeSource, getActiveKnowledgeSourceCount, MAX_KNOWLEDGE_SOURCES_PER_CLINIC } from '@/lib/knowledge/sources'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
 
 const KNOWLEDGE_BUCKET = 'clinic-knowledge'
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const RESUMABLE_THRESHOLD = 6 * 1024 * 1024
 const SUPPORTED_TYPES = new Map<string, string>([
   ['application/pdf', 'pdf'],
-  ['application/msword', 'doc'],
   ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx'],
 ])
 
@@ -35,6 +36,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
 
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-upload-prepare:${current.clinic.id}:${ip}`,
+      limit: 20,
+      windowMs: 10 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
+
     const body = await request.json().catch(() => null)
     const rawFileName = String(body?.fileName ?? '').trim()
     const mimeType = String(body?.mimeType ?? '').trim()
@@ -50,12 +60,20 @@ export async function POST(request: NextRequest) {
 
     const fileType = SUPPORTED_TYPES.get(mimeType)
     if (!fileType) {
-      return NextResponse.json({ error: 'Unsupported file type. Use PDF, DOC, or DOCX.' }, { status: 400 })
+      return NextResponse.json({ error: 'Unsupported file type. Use PDF or DOCX.' }, { status: 400 })
     }
 
     const fileName = sanitizeFileName(rawFileName)
     if (!fileName) {
       return NextResponse.json({ error: 'File name is invalid.' }, { status: 400 })
+    }
+
+    const activeCount = await getActiveKnowledgeSourceCount(supabase, current.clinic.id)
+    if (activeCount >= MAX_KNOWLEDGE_SOURCES_PER_CLINIC) {
+      return NextResponse.json(
+        { error: `You have reached the maximum of ${MAX_KNOWLEDGE_SOURCES_PER_CLINIC} knowledge sources. Please delete some before uploading new files.` },
+        { status: 429 },
+      )
     }
 
     const source = await createKnowledgeSourceDraft(supabase, {
@@ -93,7 +111,10 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Error preparing knowledge upload:', error)
+    console.error('[knowledge-sources:upload-prepare] Failed to prepare knowledge upload', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to prepare file upload' },
       { status: 500 },

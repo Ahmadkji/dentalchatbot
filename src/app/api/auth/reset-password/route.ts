@@ -20,7 +20,7 @@ function buildResponse(body: unknown, status = 200) {
 }
 
 async function requireSession(request: Request) {
-  const cookieResponse = NextResponse.next()
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (!supabase) {
@@ -29,6 +29,11 @@ async function requireSession(request: Request) {
 
   const { data: { user }, error } = await supabase.auth.getUser()
   if (error || !user) {
+    console.error('[auth:reset-password] Session validation failed', {
+      hasError: Boolean(error),
+      errorMessage: error?.message ?? 'No user returned',
+      errorCode: error?.status ?? null,
+    })
     return { cookieResponse, supabase, error: buildResponse({ error: 'Session expired.' }, 401) }
   }
 
@@ -50,7 +55,12 @@ export async function POST(request: Request) {
 
   try {
     assertSameOrigin(request.headers.get('origin'), url)
-  } catch {
+  } catch (originError) {
+    console.error('[auth:reset-password] CSRF origin check failed', {
+      origin: request.headers.get('origin'),
+      host: url.host,
+      error: originError instanceof Error ? originError.message : String(originError),
+    })
     return buildResponse({ error: 'Forbidden' }, 403)
   }
 
@@ -78,6 +88,10 @@ export async function POST(request: Request) {
 
   const { error: updateError } = await supabase.auth.updateUser({ password })
   if (updateError) {
+    console.error('[auth:reset-password] Password update failed', {
+      error: updateError.message,
+      code: updateError.status ?? null,
+    })
     return buildResponse({ error: 'Unable to update password.' }, 400)
   }
 

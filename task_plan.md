@@ -1,15 +1,24 @@
 # Task Plan
 
 ## Goal
-Add a Vitest + Playwright auth security suite, plus the minimal auth/security helpers and routes needed for the tests to pass.
+Produce a complete dependency analysis of bot setup so we can verify every function is correctly connected across UI/UX, API, business logic, database schema, RLS, and migrations.
+
+## Scope
+- Analyze current implementation only (no feature changes unless requested later).
+- Trace function-to-function, route-to-lib, and UI-to-data flows.
+- Identify missing links, stale contracts, and high-risk edge cases.
 
 ## Phases
-1. Infra: install test dependencies, add Vitest/Playwright config, add scripts.
-2. Auth core: add redirect sanitization, origin/IP/rate-limit helpers, Supabase config/error mapping, and route client helper.
-3. Auth surface: add API routes and reusable auth form components, then wire the app routes to them.
-4. Tests: add unit, component, and E2E test files requested in the task.
-5. Verification: run unit tests, list Playwright tests, and fix any failures.
+1. File inventory and ownership map for bot setup paths (frontend, backend, DB).
+2. Backend dependency trace (API routes, auth checks, lib modules, shared helpers).
+3. Frontend dependency trace (pages/components/hooks/state to API contracts).
+4. Database and schema trace (tables, constraints, RLS, migrations, background jobs).
+5. Scenario matrix + risk analysis + prioritized action plan.
 
-## Notes
-- Preserve existing app behavior where possible by keeping legacy routes as wrappers/aliases.
-- Keep auth redirects and responses generic where the task requires anti-enumeration.
+## Checklist
+- [ ] Inventory all relevant files complete
+- [ ] Function call graph mapped
+- [ ] API request/response contracts mapped
+- [ ] DB schema + RLS + migration links mapped
+- [ ] Failure modes and edge cases reviewed
+- [ ] Final verdict and next steps drafted

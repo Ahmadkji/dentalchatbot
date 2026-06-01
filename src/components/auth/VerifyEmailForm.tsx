@@ -40,7 +40,11 @@ export function VerifyEmailForm({ email }: VerifyEmailFormProps) {
       }
 
       setSuccess(true)
-    } catch {
+    } catch (error) {
+      console.error('[VerifyEmailForm] Network error during resend', {
+        email: email.trim().toLowerCase(),
+        error: error instanceof Error ? error.message : String(error),
+      })
       setError('Network error. Please check your connection and try again.')
     } finally {
       setPending(false)

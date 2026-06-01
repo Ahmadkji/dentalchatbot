@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Table,
   TableBody,
@@ -48,6 +48,7 @@ import {
   CalendarDays,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 
 interface AppointmentRequest {
   id: string
@@ -99,17 +100,25 @@ export default function AppointmentRequestsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState(emptyForm)
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   const fetchRequests = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter)
       const res = await fetch(`/api/appointment-requests?${params.toString()}`)
-      if (res.ok) {
-        const data = await res.json()
-        setRequests(data.appointmentRequests || data.requests || data || [])
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to load appointment requests')
+      const data = await res.json()
+      setRequests(data.appointmentRequests || data.requests || data || [])
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[AppointmentRequestsPage] Failed to fetch requests', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load appointment requests')
     } finally {
       setLoading(false)
@@ -117,35 +126,16 @@ export default function AppointmentRequestsPage() {
   }, [statusFilter])
 
   useEffect(() => {
-    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void fetchRequests()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchRequests])
 
-    const loadRequests = async () => {
-      setLoading(true)
-      try {
-        const params = new URLSearchParams()
-        if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter)
-        const res = await fetch(`/api/appointment-requests?${params.toString()}`)
-        if (!cancelled && res.ok) {
-          const data = await res.json()
-          setRequests(data.appointmentRequests || data.requests || data || [])
-        }
-      } catch {
-        if (!cancelled) {
-          toast.error('Failed to load appointment requests')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    void loadRequests()
-
-    return () => {
-      cancelled = true
-    }
-  }, [statusFilter])
+  // Re-fetch appointment requests when user switches back to this tab.
+  // Disabled while any dialog is open to avoid disrupting the user.
+  const anyDialogOpen = addDialogOpen || detailDialogOpen
+  useRefetchOnFocus(fetchRequests, !anyDialogOpen)
 
   const filteredRequests = requests.filter((r) => {
     const matchesSearch =
@@ -191,7 +181,10 @@ export default function AppointmentRequestsPage() {
       } else {
         toast.error('Failed to add appointment request')
       }
-    } catch {
+    } catch (error) {
+      console.error('[AppointmentRequestsPage] Failed to add request', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to add appointment request')
     } finally {
       setSubmitting(false)
@@ -220,7 +213,11 @@ export default function AppointmentRequestsPage() {
         const data = await res.json().catch(() => ({}))
         toast.error(data.error || 'Failed to confirm appointment')
       }
-    } catch {
+    } catch (error) {
+      console.error('[AppointmentRequestsPage] Failed to confirm request', {
+        requestId: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to confirm appointment')
     } finally {
       setConfirmingId(null)
@@ -240,7 +237,12 @@ export default function AppointmentRequestsPage() {
       } else {
         toast.error('Failed to update status')
       }
-    } catch {
+    } catch (error) {
+      console.error('[AppointmentRequestsPage] Failed to update status', {
+        requestId: id,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update status')
     }
   }

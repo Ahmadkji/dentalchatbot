@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +25,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import { Check, Pencil, X } from 'lucide-react'
 
 interface Setting {
@@ -50,12 +51,6 @@ const labels: Record<string, string> = {
   parking_info: 'Parking Info',
   google_maps_url: 'Maps URL',
   lead_collection_enabled: 'Lead Collection',
-  lead_collect_email: 'Collect Email',
-  lead_collect_name: 'Collect Name',
-  lead_collect_phone: 'Collect Phone',
-  lead_trigger_mode: 'Trigger Mode',
-  lead_trigger_message_count: 'Trigger Message Count',
-  lead_trigger_keywords: 'Trigger Keywords',
   lead_notifications_enabled: 'Lead Notifications',
   lead_notification_emails: 'Notification Emails',
 }
@@ -81,6 +76,7 @@ const hiddenKeys = new Set([
   'lead_trigger_mode',
   'lead_trigger_message_count',
   'lead_notifications_enabled',
+  'lead_auto_escalation',
 ])
 
 const longFields = new Set([
@@ -90,14 +86,10 @@ const longFields = new Set([
   'greeting_message',
   'closing_message',
   'emergency_response',
-  'lead_trigger_keywords',
 ])
 
 const booleanKeys = new Set([
   'lead_collection_enabled',
-  'lead_collect_email',
-  'lead_collect_name',
-  'lead_collect_phone',
   'lead_notifications_enabled',
   'auto_reply',
   'faq_enabled',
@@ -113,23 +105,41 @@ export default function SettingsPage() {
   const [inlineKey, setInlineKey] = useState<string | null>(null)
   const [inlineValue, setInlineValue] = useState('')
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const res = await fetch('/api/settings')
-        if (!res.ok) throw new Error('Failed to load settings')
-        const data = await res.json()
-        setSettings(data.settings || [])
-      } catch {
-        toast.error('Failed to load settings')
-      } finally {
-        setLoading(false)
-      }
-    }
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+  const [editingDialogOpen, setEditingDialogOpen] = useState(false)
 
-    void load()
+  const fetchData = useCallback(async () => {
+    if (!hasLoadedRef.current) setLoading(true)
+    try {
+      const res = await fetch('/api/settings')
+      if (!res.ok) throw new Error('Failed to load settings')
+      const data = await res.json()
+      setSettings(data.settings || [])
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[SettingsPage] Failed to fetch settings', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      toast.error('Failed to load settings')
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchData()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchData])
+
+  // Re-fetch settings when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  // Disabled while an editor dialog is open to avoid disrupting the user.
+  useRefetchOnFocus(fetchData, !editingDialogOpen && !inlineKey)
 
   const filtered = useMemo(() => {
     const base = category === 'all' ? settings : settings.filter((setting) => setting.category === category)
@@ -159,7 +169,11 @@ export default function SettingsPage() {
       const updated = await patchSetting(setting.key, next)
       setSettings((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
       toast.success(`${labels[setting.key] || setting.key} ${next === 'true' ? 'enabled' : 'disabled'}`)
-    } catch {
+    } catch (error) {
+      console.error('[SettingsPage] Failed to toggle setting', {
+        key: setting.key,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update setting')
     }
   }
@@ -176,7 +190,11 @@ export default function SettingsPage() {
       setSettings((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
       setInlineKey(null)
       toast.success('Setting updated')
-    } catch {
+    } catch (error) {
+      console.error('[SettingsPage] Failed to save inline setting', {
+        key: inlineKey,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update setting')
     }
   }
@@ -189,6 +207,7 @@ export default function SettingsPage() {
   const openEditor = (setting: Setting) => {
     setEditing(setting)
     setEditValue(setting.value)
+    setEditingDialogOpen(true)
   }
 
   const save = async () => {
@@ -198,8 +217,13 @@ export default function SettingsPage() {
       const updated = await patchSetting(editing.key, editValue)
       setSettings((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
       setEditing(null)
+      setEditingDialogOpen(false)
       toast.success('Setting updated')
-    } catch {
+    } catch (error) {
+      console.error('[SettingsPage] Failed to save setting', {
+        key: editing.key,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update setting')
     } finally {
       setSaving(false)
@@ -345,7 +369,12 @@ export default function SettingsPage() {
       </Table>
       </div>
 
-      <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog open={editingDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setEditing(null)
+          setEditingDialogOpen(false)
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editing ? labels[editing.key] || editing.key : 'Edit setting'}</DialogTitle>
@@ -359,7 +388,7 @@ export default function SettingsPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setEditing(null); setEditingDialogOpen(false) }}>Cancel</Button>
             <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={save} disabled={saving}>
               {saving ? 'Saving...' : 'Save'}
             </Button>

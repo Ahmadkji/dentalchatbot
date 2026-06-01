@@ -4,7 +4,7 @@ import { getCurrentClinicSnapshot } from '@/lib/clinics/current'
 import { clinicProfileUpdateSchema, normalizeClinicProfileUpdate } from '@/lib/clinics/validation'
 
 const clinicSelect =
-  'id,name,slug,country,city,address,timezone,phone,whatsapp,website_url,map_link,pricing_notes,appointment_rules,emergency_instructions,status,owner_id,profile_completed,is_live'
+  'id,name,slug,country,city,address,timezone,phone,whatsapp,website_url,map_link,pricing_notes,default_currency,appointment_rules,emergency_instructions,status,owner_id,profile_completed,is_live'
 
 function mapClinicForResponse(snapshot: Awaited<ReturnType<typeof getCurrentClinicSnapshot>>) {
   if (!snapshot.clinic) {
@@ -25,6 +25,7 @@ function mapClinicForResponse(snapshot: Awaited<ReturnType<typeof getCurrentClin
       website_url: snapshot.clinic.website_url,
       map_link: snapshot.clinic.map_link,
       pricing_notes: snapshot.clinic.pricing_notes,
+      default_currency: snapshot.clinic.default_currency,
       appointment_rules: snapshot.clinic.appointment_rules,
       emergency_instructions: snapshot.clinic.emergency_instructions,
       profile_completed: snapshot.clinic.profile_completed,
@@ -48,7 +49,10 @@ export async function GET() {
 
     return NextResponse.json(mapClinicForResponse(snapshot))
   } catch (error) {
-    console.error('Error fetching current clinic:', error)
+    console.error('[clinics/current:GET] Failed to fetch current clinic', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch clinic profile' }, { status: 500 })
   }
 }
@@ -118,7 +122,10 @@ export async function PATCH(request: NextRequest) {
     const refreshed = await getCurrentClinicSnapshot(supabase, user)
     return NextResponse.json(mapClinicForResponse(refreshed))
   } catch (error) {
-    console.error('Error updating current clinic:', error)
+    console.error('[clinics/current:PATCH] Failed to update current clinic', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update clinic profile' }, { status: 500 })
   }
 }

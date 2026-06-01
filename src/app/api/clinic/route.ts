@@ -22,6 +22,8 @@ function toCompatibilityBody(body: Record<string, unknown>) {
   if (typeof body.mapLink === 'string') normalized.map_link = body.mapLink
   if (typeof body.pricing_notes === 'string') normalized.pricing_notes = body.pricing_notes
   if (typeof body.pricingNotes === 'string') normalized.pricing_notes = body.pricingNotes
+  if (typeof body.default_currency === 'string') normalized.default_currency = body.default_currency
+  if (typeof body.defaultCurrency === 'string') normalized.default_currency = body.defaultCurrency
   if (typeof body.appointment_rules === 'string') normalized.appointment_rules = body.appointment_rules
   if (typeof body.appointmentRules === 'string') normalized.appointment_rules = body.appointmentRules
   if (typeof body.emergency_instructions === 'string') normalized.emergency_instructions = body.emergency_instructions
@@ -43,7 +45,10 @@ export async function GET() {
 
     return NextResponse.json(mapClinicToAppProfile(snapshot.clinic, snapshot.hours))
   } catch (error) {
-    console.error('Error fetching clinic profile:', error)
+    console.error('[clinic:GET] Failed to fetch clinic profile', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch clinic profile' }, { status: 500 })
   }
 }
@@ -117,7 +122,10 @@ export async function PATCH(request: NextRequest) {
     const refreshed = await getCurrentClinicSnapshot(supabase, user)
     return NextResponse.json(mapClinicToAppProfile(refreshed.clinic!, refreshed.hours))
   } catch (error) {
-    console.error('Error updating clinic profile:', error)
+    console.error('[clinic:PATCH] Failed to update clinic profile', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update clinic profile' }, { status: 500 })
   }
 }

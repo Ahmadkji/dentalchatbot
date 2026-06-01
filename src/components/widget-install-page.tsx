@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -51,6 +52,7 @@ import {
 import { toast } from 'sonner'
 
 interface WidgetSettings {
+  enabled: boolean
   botName: string
   welcomeMessage: string
   primaryColor: string
@@ -163,8 +165,16 @@ export default function WidgetInstallPage() {
   const [editingDomains, setEditingDomains] = useState(false)
   const [savingDomains, setSavingDomains] = useState(false)
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   const fetchData = useCallback(async () => {
-    setLoading(true)
+    // Only show skeleton rows on the very first load.
+    // Background re-fetches keep existing data visible —
+    // same pattern as SWR revalidateOnFocus / TanStack Query refetchOnWindowFocus.
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const [settingsRes, promptsRes] = await Promise.all([
         fetch('/api/widget-settings'),
@@ -176,24 +186,29 @@ export default function WidgetInstallPage() {
       const settingsData = await settingsRes.json()
       const promptsData = await promptsRes.json()
       setSettings(settingsData)
-      setPrompts(promptsData)
+      setPrompts(Array.isArray(promptsData) ? promptsData : [])
 
       // Initialize domains textarea from settings
       if (settingsData.allowedDomains) {
         setDomainsText(settingsData.allowedDomains.join('\n'))
       }
-      if (settingsData.slug) {
-        // Update settings with slug if not already present
-        settingsData.slug = settingsData.slug
+
+      // Only fetch templates on first load — they are static constants
+      // that never change, so re-fetching on every mutation is wasteful.
+      if (!hasLoadedRef.current) {
+        const templatesRes = await fetch('/api/widget-settings/templates')
+        if (templatesRes.ok) {
+          const templateData = await templatesRes.json()
+          setTemplates(templateData.templates || [])
+        }
       }
 
-      const templatesRes = await fetch('/api/widget-settings/templates')
-      if (templatesRes.ok) {
-        const templateData = await templatesRes.json()
-        setTemplates(templateData.templates || [])
-      }
+      hasLoadedRef.current = true
       setPreviewVersion((prev) => prev + 1)
-    } catch {
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to fetch widget data', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load widget settings')
     } finally {
       setLoading(false)
@@ -208,8 +223,15 @@ export default function WidgetInstallPage() {
     return () => window.clearTimeout(timer)
   }, [fetchData])
 
+  // Re-fetch widget settings when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  // Disabled while any editor dialog is open to avoid overwriting in-progress edits
+  // (e.g. domainsText in the domains editor, or prompt form state).
+  useRefetchOnFocus(fetchData, !editingDomains && !settingsDialogOpen && !promptDialogOpen)
+
   const rows = useMemo(
     () => [
+      { key: 'enabled', label: 'Widget Enabled' },
       { key: 'botName', label: 'Bot Name' },
       { key: 'welcomeMessage', label: 'Welcome Message' },
       { key: 'primaryColor', label: 'Primary Color' },
@@ -221,7 +243,7 @@ export default function WidgetInstallPage() {
   const activePromptCount = prompts.filter((prompt) => prompt.isActive).length
 
   const previewUrl = settings?.clinicId
-    ? `/widget-frame?clinicId=${encodeURIComponent(settings.clinicId)}&preview=${previewVersion}&mode=embedded`
+    ? `/widget-frame?clinicId=${encodeURIComponent(settings.clinicId)}&clinicSlug=${encodeURIComponent(settings.slug)}&preview=${previewVersion}&mode=embedded`
     : `/widget-frame?preview=${previewVersion}&mode=embedded`
 
   const saveAllowedDomains = async () => {
@@ -238,10 +260,15 @@ export default function WidgetInstallPage() {
       })
       if (!res.ok) throw new Error('Failed to save domains')
       const updated = await res.json()
-      setSettings((prev) => (prev ? { ...prev, ...updated } : prev))
+      // Preserve embedCode from previous state — PATCH response doesn't include it
+      // because embedCode is generated only by the GET handler (see route.ts GET).
+      setSettings((prev) => (prev ? { ...prev, ...updated, embedCode: prev.embedCode } : prev))
       setEditingDomains(false)
       toast.success('Allowed domains updated')
-    } catch {
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to save allowed domains', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update allowed domains')
     } finally {
       setSavingDomains(false)
@@ -266,11 +293,16 @@ export default function WidgetInstallPage() {
       })
       if (!res.ok) throw new Error('Failed to save')
       const updated = await res.json()
-      setSettings((prev) => (prev ? { ...prev, ...updated } : prev))
+      // Preserve embedCode from previous state — PATCH response doesn't include it.
+      setSettings((prev) => (prev ? { ...prev, ...updated, embedCode: prev.embedCode } : prev))
       setSettingsDialogOpen(false)
       setPreviewVersion((prev) => prev + 1)
       toast.success('Widget setting updated')
-    } catch {
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to save widget setting', {
+        field: editingField,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update widget setting')
     } finally {
       setSubmitting(false)
@@ -284,7 +316,10 @@ export default function WidgetInstallPage() {
       setCopySuccess(true)
       window.setTimeout(() => setCopySuccess(false), 1500)
       toast.success('Embed code copied')
-    } catch {
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to copy embed code', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Unable to copy. Please copy manually.')
     }
   }
@@ -335,8 +370,12 @@ export default function WidgetInstallPage() {
       toast.success(editingPrompt ? 'Quick prompt updated' : 'Quick prompt added')
       setPromptDialogOpen(false)
       setPromptForm(emptyPrompt)
-      void fetchData()
-    } catch {
+      await fetchData()
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to save quick prompt', {
+        label: promptForm.label,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to save quick prompt')
     } finally {
       setSubmitting(false)
@@ -344,24 +383,35 @@ export default function WidgetInstallPage() {
   }
 
   const deletePrompt = async (id: string) => {
+    const ok = window.confirm('Delete this quick prompt? This action cannot be undone.')
+    if (!ok) return
     try {
       const res = await fetch(`/api/widget-settings/quick-prompts/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete')
       toast.success('Quick prompt deleted')
-      void fetchData()
-    } catch {
+      await fetchData()
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to delete quick prompt', {
+        promptId: id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to delete quick prompt')
     }
   }
 
   const resetDentalPrompts = async () => {
+    const ok = window.confirm('This will replace ALL your current prompts with the 6 dental defaults. Continue?')
+    if (!ok) return
     setSubmitting(true)
     try {
       const res = await fetch('/api/widget-settings/quick-prompts/reset-dental', { method: 'POST' })
       if (!res.ok) throw new Error('Failed to reset prompts')
       toast.success('Loaded dental starter prompts')
-      void fetchData()
-    } catch {
+      await fetchData()
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to reset dental prompts', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load dental starter prompts')
     } finally {
       setSubmitting(false)
@@ -378,8 +428,12 @@ export default function WidgetInstallPage() {
       })
       if (!res.ok) throw new Error('Failed to apply template')
       toast.success('Widget template applied')
-      void fetchData()
-    } catch {
+      await fetchData()
+    } catch (error) {
+      console.error('[WidgetInstallPage] Failed to apply widget template', {
+        templateId,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to apply widget template')
     } finally {
       setSubmitting(false)
@@ -527,11 +581,26 @@ export default function WidgetInstallPage() {
                 <p>Your website CSP must allow <code className="bg-amber-100 px-1 rounded">script-src</code> and <code className="bg-amber-100 px-1 rounded">frame-src</code> pointing to this app domain.</p>
               </div>
             </CardContent>
-          </Card>
+        </Card>
 
-          <Card className="border-slate-200">
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-base">Dental Widget Templates</CardTitle>
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-600">
+            Billing is managed on the Payments page.
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              window.location.href = '/dashboard/billing'
+            }}
+          >
+            Go to Payments
+          </Button>
+        </div>
+
+        <Card className="border-slate-200">
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-base">Dental Widget Templates</CardTitle>
               <CardDescription>Start with a style preset, then fine tune details below.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -780,12 +849,7 @@ export default function WidgetInstallPage() {
                   />
                 )}
               </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-600">
-                <p className="mb-1 font-medium text-slate-700">Preview Tips</p>
-                <p>1. Click prompt chips to test common visitor journeys.</p>
-                <p>2. Test WhatsApp / appointment CTA actions before publishing.</p>
-                <p>3. Use Refresh Preview after any setting or prompt update.</p>
-              </div>
+
             </CardContent>
           </Card>
         </div>
@@ -908,9 +972,20 @@ export default function WidgetInstallPage() {
               <div className="space-y-2">
                 <Label>Sort Order</Label>
                 <Input
+                  type="number"
+                  min={1}
+                  step={1}
                   value={String(promptForm.sortOrder)}
                   onChange={(event) =>
-                    setPromptForm((prev) => ({ ...prev, sortOrder: Number(event.target.value) || 99 }))
+                    setPromptForm((prev) => {
+                      const parsedSortOrder = Number(event.target.value)
+                      return {
+                        ...prev,
+                        sortOrder: Number.isFinite(parsedSortOrder)
+                          ? Math.max(1, Math.floor(parsedSortOrder))
+                          : 99,
+                      }
+                    })
                   }
                 />
               </div>

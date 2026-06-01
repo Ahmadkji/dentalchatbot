@@ -57,7 +57,10 @@ export async function POST() {
       (created as QuickPromptRow[]).map((row) => mapWidgetQuickPromptRow(row, promptOptions))
     )
   } catch (error) {
-    console.error('Error resetting dental prompts:', error)
+    console.error('[quick-prompts:reset-dental] Failed to reset dental prompts', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to reset prompts' }, { status: 500 })
   }
 }

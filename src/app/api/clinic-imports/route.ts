@@ -29,11 +29,15 @@ export async function POST(request: NextRequest) {
       current.clinic.id,
       user.id,
       websiteUrl,
+      { defaultCountry: current.clinic.country ?? null },
     )
 
     return NextResponse.json(created, { status: 201 })
   } catch (error) {
-    console.error('Error creating clinic import session:', error)
+    console.error('[clinic-imports:POST] Failed to create clinic import session', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to import clinic website details.' },
       { status: 500 },

@@ -1,46 +1,23 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Switch } from '@/components/ui/switch'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import {
   MessageSquareOff,
   MessageCircle,
-  UserCheck,
-  Database,
-  LightbulbOff,
-  Settings,
 } from 'lucide-react'
+import {
+  CUSTOMIZATION_DEFAULTS,
+  type CustomizationSettings,
+} from '@/lib/customizations/settings'
 
-interface CustomizationSettings {
-  fallback_message: string
-  chat_mode: 'human' | 'ai'
-  collect_user_details: 'mandatory' | 'optional' | 'none'
-  collect_name: boolean
-  collect_email: boolean
-  collect_phone: boolean
-  disable_smart_followup: boolean
-  smart_followup_count: number
-}
-
-const defaultSettings: CustomizationSettings = {
-  fallback_message:
-    "I'm sorry, I don't have the information you're looking for. Let me connect you with someone who can help.",
-  chat_mode: 'ai',
-  collect_user_details: 'optional',
-  collect_name: true,
-  collect_email: true,
-  collect_phone: true,
-  disable_smart_followup: false,
-  smart_followup_count: 3,
-}
+const defaultSettings: CustomizationSettings = CUSTOMIZATION_DEFAULTS
 
 export default function CustomizationsPage() {
   const [settings, setSettings] = useState<CustomizationSettings>(defaultSettings)
@@ -48,29 +25,43 @@ export default function CustomizationsPage() {
   const [saving, setSaving] = useState(false)
   const settingsRef = useRef(settings)
 
-  useEffect(() => {
-    settingsRef.current = settings
-  }, [settings])
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
+  const fetchData = useCallback(async () => {
+    if (!hasLoadedRef.current) setLoading(true)
+    try {
+      const res = await fetch('/api/customizations')
+      if (!res.ok) throw new Error('Failed to load customizations')
+      const data = await res.json()
+      if (data.settings) {
+        const merged = { ...defaultSettings, ...data.settings }
+        setSettings(merged)
+        settingsRef.current = merged
+      }
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[CustomizationsPage] Failed to fetch customizations', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      toast.error('Failed to load customizations')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const res = await fetch('/api/customizations')
-        if (res.ok) {
-          const data = await res.json()
-          if (data.settings) {
-            setSettings({ ...defaultSettings, ...data.settings })
-          }
-        }
-      } catch {
-        // Use defaults on error
-      } finally {
-        setLoading(false)
-      }
-    }
-    void load()
-  }, [])
+    const timer = window.setTimeout(() => {
+      void fetchData()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchData])
+
+  // Re-fetch customizations when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  useRefetchOnFocus(fetchData)
 
   const saveSettings = useCallback(async (data?: CustomizationSettings) => {
     const toSave = data || settingsRef.current
@@ -84,9 +75,33 @@ export default function CustomizationsPage() {
       if (res.ok) {
         toast.success('Customizations saved')
       } else {
-        toast.error('Failed to save customizations')
+        const errData = await res.json().catch(() => ({}))
+        console.error('[CustomizationsPage] API returned non-OK', {
+          status: res.status,
+          body: errData,
+        })
+        toast.error(errData.error || 'Failed to save customizations')
+        // Re-fetch server state so the UI reflects what was actually persisted
+        try {
+          const freshRes = await fetch('/api/customizations')
+          if (freshRes.ok) {
+            const freshData = await freshRes.json()
+            if (freshData.settings) {
+              const reverted = { ...defaultSettings, ...freshData.settings }
+              setSettings(reverted)
+              settingsRef.current = reverted
+            }
+          }
+        } catch (rollbackError) {
+          console.error('[CustomizationsPage] Rollback re-fetch failed', {
+            error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+          })
+        }
       }
-    } catch {
+    } catch (error) {
+      console.error('[CustomizationsPage] Network error', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to save customizations')
     } finally {
       setSaving(false)
@@ -100,7 +115,7 @@ export default function CustomizationsPage() {
       settingsRef.current = updated
       void saveSettings(updated)
     },
-    [saveSettings]
+    [saveSettings],
   )
 
   if (loading) {
@@ -126,7 +141,7 @@ export default function CustomizationsPage() {
       <div>
         <h2 className="text-lg font-semibold tracking-tight">Customizations</h2>
         <p className="text-sm text-muted-foreground">
-          Configure your chatbot behavior, messaging, and data collection preferences.
+          Configure the chatbot tone and fallback message.
         </p>
       </div>
 
@@ -153,7 +168,11 @@ export default function CustomizationsPage() {
               setSettings(updated)
               settingsRef.current = updated
             }}
-            onBlur={() => void saveSettings()}
+            onBlur={() => {
+              // Only auto-save if not already saving to prevent double-save
+              // when the user clicks the Save button (which steals focus, triggering onBlur).
+              if (!saving) void saveSettings()
+            }}
             className="text-sm"
             placeholder="Enter a fallback message..."
           />
@@ -207,165 +226,6 @@ export default function CustomizationsPage() {
             </div>
           </RadioGroup>
         </div>
-      </div>
-
-      {/* Section 3: Collect User Details */}
-      <div className="rounded-md border">
-        <div className="flex items-center gap-3 border-b px-4 py-3 bg-muted/30">
-          <div className="flex size-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700">
-            <UserCheck className="size-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold">Collect User Details</h3>
-            <p className="text-xs text-muted-foreground">
-              Choose whether or not you want to collect the user details.
-            </p>
-          </div>
-        </div>
-        <div className="p-4">
-          <RadioGroup
-            value={settings.collect_user_details}
-            onValueChange={(v) =>
-              updateAndSave({ collect_user_details: v as 'mandatory' | 'optional' | 'none' })
-            }
-            className="space-y-3"
-          >
-            <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/30 transition-colors">
-              <RadioGroupItem value="mandatory" id="collect-mandatory" className="mt-0.5" />
-              <div className="flex-1">
-                <Label htmlFor="collect-mandatory" className="text-sm font-medium cursor-pointer">
-                  Mandatory
-                </Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  User has to enter their details before they can continue the conversation.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/30 transition-colors">
-              <RadioGroupItem value="optional" id="collect-optional" className="mt-0.5" />
-              <div className="flex-1">
-                <Label htmlFor="collect-optional" className="text-sm font-medium cursor-pointer">
-                  Optional
-                </Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  We try to collect user details, but user should still be able to continue chatting
-                  by skipping the user details forms.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start space-x-3 rounded-lg border p-3 hover:bg-muted/30 transition-colors">
-              <RadioGroupItem value="none" id="collect-none" className="mt-0.5" />
-              <div className="flex-1">
-                <Label htmlFor="collect-none" className="text-sm font-medium cursor-pointer">
-                  Do Not Collect
-                </Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  We will not collect any user details.
-                </p>
-              </div>
-            </div>
-          </RadioGroup>
-        </div>
-      </div>
-
-      {/* Section 4: Data Types */}
-      {settings.collect_user_details !== 'none' && (
-        <div className="rounded-md border">
-          <div className="flex items-center gap-3 border-b px-4 py-3 bg-muted/30">
-            <div className="flex size-8 items-center justify-center rounded-md bg-violet-100 text-violet-700">
-              <Database className="size-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold">Data Types</h3>
-              <p className="text-xs text-muted-foreground">
-                Choose what information you want to collect from visitors.
-              </p>
-            </div>
-          </div>
-          <div className="p-4 space-y-4">
-            <div className="flex items-center gap-3 rounded-lg border p-3">
-              <Checkbox
-                id="data-name"
-                checked={settings.collect_name}
-                onCheckedChange={(checked) => updateAndSave({ collect_name: !!checked })}
-              />
-              <Label htmlFor="data-name" className="text-sm font-medium cursor-pointer flex-1">
-                Name
-              </Label>
-            </div>
-            <div className="flex items-center gap-3 rounded-lg border p-3">
-              <Checkbox
-                id="data-email"
-                checked={settings.collect_email}
-                onCheckedChange={(checked) => updateAndSave({ collect_email: !!checked })}
-              />
-              <Label htmlFor="data-email" className="text-sm font-medium cursor-pointer flex-1">
-                Email Address
-              </Label>
-            </div>
-            <div className="flex items-center gap-3 rounded-lg border p-3">
-              <Checkbox
-                id="data-phone"
-                checked={settings.collect_phone}
-                onCheckedChange={(checked) => updateAndSave({ collect_phone: !!checked })}
-              />
-              <Label htmlFor="data-phone" className="text-sm font-medium cursor-pointer flex-1">
-                Phone Number
-              </Label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Section 5: Disable Smart Follow Up Questions */}
-      <div className="rounded-md border">
-        <div className="flex items-center gap-3 border-b px-4 py-3 bg-muted/30">
-          <div className="flex size-8 items-center justify-center rounded-md bg-rose-100 text-rose-700">
-            <LightbulbOff className="size-4" />
-          </div>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold">Disable Smart Follow Up Questions</h3>
-            <p className="text-xs text-muted-foreground">
-              SiteGPT suggests smart follow up questions to help the user get required information
-              faster. Click this toggle to disable it.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="disable-followup" className="text-xs font-medium">
-              Disable smart follow up questions
-            </Label>
-            <Switch
-              id="disable-followup"
-              checked={settings.disable_smart_followup}
-              onCheckedChange={(checked) => updateAndSave({ disable_smart_followup: checked })}
-            />
-          </div>
-        </div>
-        {!settings.disable_smart_followup && (
-          <div className="p-4 space-y-3">
-            <Label htmlFor="followup-count" className="text-sm font-medium">
-              Number of smart follow up questions to be shown
-            </Label>
-            <Input
-              id="followup-count"
-              type="number"
-              min={1}
-              max={5}
-              value={settings.smart_followup_count}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10)
-                if (!isNaN(val) && val >= 1 && val <= 5) {
-                  const updated = { ...settingsRef.current, smart_followup_count: val }
-                  setSettings(updated)
-                  settingsRef.current = updated
-                }
-              }}
-              onBlur={() => void saveSettings()}
-              className="w-20 h-9 text-center text-sm"
-            />
-            <p className="text-xs text-muted-foreground">Choose a number between 1 and 5.</p>
-          </div>
-        )}
       </div>
 
       {/* Save Button */}

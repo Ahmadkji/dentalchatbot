@@ -4,12 +4,14 @@ import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { requireCurrentClinicAccess } from '@/lib/clinic-access'
 import { normalizeAllowedDomains } from '@/lib/clinics/validation'
+import { getSiteUrl } from '@/lib/site-url'
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
 const VALID_POSITIONS = ['bottom-right', 'bottom-left'] as const
 
 const widgetSettingsPatchSchema = z
   .object({
+    enabled: z.boolean().optional(),
     botName: z.string().trim().min(1).max(80).optional(),
     welcomeMessage: z.string().trim().min(1).max(500).optional(),
     primaryColor: z.string().regex(HEX_COLOR_RE).optional(),
@@ -49,12 +51,7 @@ function resolveScriptOrigin(request: NextRequest) {
     return `https://${forwardedHost}`
   }
 
-  const configuredOrigin = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
-  if (configuredOrigin) {
-    return configuredOrigin.endsWith('/') ? configuredOrigin.slice(0, -1) : configuredOrigin
-  }
-
-  return 'https://yourdomain.com'
+  return getSiteUrl()
 }
 
 function mapWidgetSettings(row: WidgetSettingsRow, clinic: { id: string; slug: string; whatsapp: string | null }, embedCode?: string) {
@@ -93,15 +90,30 @@ export async function GET(request: NextRequest) {
       .maybeSingle()
 
     if (error || !widgetSettings) {
+      console.warn('[widget-settings:GET] Widget settings not found', {
+        userId: user.id,
+        clinicId: clinic.id,
+        clinicSlug: clinic.slug,
+      })
       return NextResponse.json({ error: 'Widget settings not found' }, { status: 404 })
     }
 
     const origin = resolveScriptOrigin(request)
     const embedCode = `<script src="${origin}/widget.js" data-clinic-slug="${clinic.slug}"></script>`
+    console.info('[widget-settings:GET] Generated widget embed code', {
+      userId: user.id,
+      clinicId: clinic.id,
+      clinicSlug: clinic.slug,
+      origin,
+      allowedDomainsCount: widgetSettings.allowed_domains.length,
+    })
 
     return NextResponse.json(mapWidgetSettings(widgetSettings as WidgetSettingsRow, clinic, embedCode))
   } catch (error) {
-    console.error('Error fetching widget settings:', error)
+    console.error('[widget-settings:GET] Failed to fetch widget settings', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch widget settings' }, { status: 500 })
   }
 }
@@ -133,6 +145,7 @@ export async function PATCH(request: NextRequest) {
     const data: Record<string, unknown> = parsed.data
 
     const updateData: Record<string, unknown> = {}
+    if (data.enabled !== undefined) updateData.enabled = data.enabled
     if (typeof data.botName === 'string') updateData.widget_title = data.botName
     if (typeof data.welcomeMessage === 'string') updateData.welcome_message = data.welcomeMessage
     if (data.primaryColor !== undefined) updateData.primary_color = data.primaryColor
@@ -150,12 +163,27 @@ export async function PATCH(request: NextRequest) {
       .single()
 
     if (error) {
+      console.error('[widget-settings:PATCH] Failed to update widget settings', {
+        userId: user.id,
+        clinicId: clinic.id,
+        clinicSlug: clinic.slug,
+        error: error instanceof Error ? error.message : String(error),
+      })
       return NextResponse.json({ error: 'Failed to update widget settings' }, { status: 400 })
     }
 
+    console.info('[widget-settings:PATCH] Updated widget settings', {
+      userId: user.id,
+      clinicId: clinic.id,
+      clinicSlug: clinic.slug,
+      updatedFields: Object.keys(updateData),
+    })
     return NextResponse.json(mapWidgetSettings(updated as WidgetSettingsRow, clinic))
   } catch (error) {
-    console.error('Error updating widget settings:', error)
+    console.error('[widget-settings:PATCH] Failed to update widget settings', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update widget settings' }, { status: 500 })
   }
 }

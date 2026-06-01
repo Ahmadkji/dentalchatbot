@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { createHash } from 'node:crypto'
+import { normalizeKnowledgeImportUrlForStorage } from '@/lib/knowledge-import'
 import { embedText384, embedTexts384, serializePgVector } from '@/lib/knowledge/embeddings'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
@@ -106,6 +107,8 @@ const chunkSelect = [
 const CHUNK_CHARACTER_LIMIT = 4200
 const CHUNK_OVERLAP_CHARACTERS = 600
 const MIN_MANUAL_TEXT_LENGTH = 40
+export const MAX_KNOWLEDGE_SOURCES_PER_CLINIC = 50
+export const DEFAULT_KNOWLEDGE_SOURCES_PAGE_SIZE = 100
 
 const sourcePriority: Record<KnowledgeSourceType, number> = {
   faq: 400,
@@ -267,13 +270,22 @@ export async function listKnowledgeSourcesForClinic(
     status?: KnowledgeSourceStatus | null
     isActive?: boolean | null
     includeFaq?: boolean
+    limit?: number
+    offset?: number
   },
 ) {
+  const pageLimit = Math.max(1, Math.min(
+    filters?.limit ?? DEFAULT_KNOWLEDGE_SOURCES_PAGE_SIZE,
+    DEFAULT_KNOWLEDGE_SOURCES_PAGE_SIZE,
+  ))
+  const pageOffset = Math.max(0, filters?.offset ?? 0)
+
   let query = supabase
     .from('knowledge_sources')
-    .select(knowledgeSourceSelect)
+    .select(knowledgeSourceSelect, { count: 'exact' })
     .eq('clinic_id', clinicId)
     .order('updated_at', { ascending: false })
+    .range(pageOffset, pageOffset + pageLimit - 1)
 
   if (!filters?.includeFaq) {
     query = query.neq('source_type', 'faq')
@@ -291,12 +303,22 @@ export async function listKnowledgeSourcesForClinic(
     query = query.eq('is_active', filters.isActive)
   }
 
-  const { data, error } = await query
+  const { data, error, count } = await query
   if (error) {
+    console.error('[knowledge:sources] listKnowledgeSourcesForClinic failed', {
+      clinicId,
+      filters,
+      dbError: error.message,
+    })
     throw error
   }
 
-  return (data ?? []) as KnowledgeSourceRow[]
+  return {
+    sources: (data ?? []) as KnowledgeSourceRow[],
+    total: count ?? 0,
+    limit: pageLimit,
+    offset: pageOffset,
+  }
 }
 
 export async function getKnowledgeSourceForClinic(
@@ -323,12 +345,13 @@ export async function findKnowledgeSourceByUrl(
   clinicId: string,
   url: string,
 ) {
+  const normalizedUrl = normalizeKnowledgeImportUrlForStorage(url)
   const { data, error } = await supabase
     .from('knowledge_sources')
     .select(knowledgeSourceSelect)
     .eq('clinic_id', clinicId)
     .eq('source_type', 'website_url')
-    .eq('source_url', url)
+    .eq('source_url', normalizedUrl)
     .maybeSingle()
 
   if (error) {
@@ -353,6 +376,11 @@ export async function createKnowledgeSourceDraft(
     status?: KnowledgeSourceStatus
   },
 ) {
+  const normalizedSourceUrl =
+    input.sourceType === 'website_url' && input.sourceUrl
+      ? normalizeKnowledgeImportUrlForStorage(input.sourceUrl)
+      : input.sourceUrl ?? null
+
   const { data, error } = await supabase
     .from('knowledge_sources')
     .insert({
@@ -360,7 +388,7 @@ export async function createKnowledgeSourceDraft(
       title: input.title,
       source_type: input.sourceType,
       content: input.content ?? '',
-      source_url: input.sourceUrl ?? null,
+      source_url: normalizedSourceUrl,
       file_name: input.fileName ?? null,
       file_type: input.fileType ?? null,
       status: input.status ?? 'draft',
@@ -540,7 +568,7 @@ export async function createKnowledgeSourceRecord(
       fileName: input.fileName ?? null,
     })
   } catch (syncError) {
-    await supabase
+    const { error: statusUpdateError } = await supabase
       .from('knowledge_sources')
       .update({
         status: 'failed',
@@ -549,7 +577,16 @@ export async function createKnowledgeSourceRecord(
             ? syncError.message
             : 'Failed to process knowledge source.',
       })
+      .eq('clinic_id', input.clinicId)
       .eq('id', created.id)
+
+    if (statusUpdateError) {
+      console.error('[knowledge:sources] Failed to update source status to failed', {
+        sourceId: created.id,
+        originalError: syncError instanceof Error ? syncError.message : String(syncError),
+        statusUpdateError: statusUpdateError.message,
+      })
+    }
 
     throw syncError
   }
@@ -611,10 +648,113 @@ export async function disableKnowledgeSource(
   })
 
   if (error) {
+    console.error('[knowledge:sources] disable_knowledge_source RPC failed', {
+      sourceId,
+      rpcError: error.message,
+    })
     throw new Error(error.message || 'Failed to disable knowledge source.')
   }
 
+  console.info('[knowledge:sources] Knowledge source disabled', {
+    sourceId,
+  })
   return data as KnowledgeSourceRow
+}
+
+export interface HardDeleteResult {
+  deletedSourceId: string
+  clinicId: string
+  sourceType: string
+  deletedChunks: number
+  deletedFiles: number
+  deletedRuns: number
+  storagePath: string | null
+  fileName: string | null
+  bucketName: string | null
+}
+
+export async function hardDeleteKnowledgeSource(
+  supabase: SupabaseLikeClient,
+  sourceId: string,
+): Promise<HardDeleteResult> {
+  const { data, error } = await supabase.rpc('delete_knowledge_source', {
+    p_source_id: sourceId,
+  })
+
+  if (error) {
+    console.error('[knowledge:sources] delete_knowledge_source RPC failed', {
+      sourceId,
+      rpcError: error.message,
+    })
+    throw new Error(error.message || 'Failed to delete knowledge source.')
+  }
+
+  const result = data as HardDeleteResult
+  console.info('[knowledge:sources] Knowledge source hard-deleted', {
+    sourceId: result.deletedSourceId,
+    clinicId: result.clinicId,
+    sourceType: result.sourceType,
+    deletedChunks: result.deletedChunks,
+    deletedFiles: result.deletedFiles,
+    deletedRuns: result.deletedRuns,
+    storagePath: result.storagePath,
+  })
+
+  return result
+}
+
+export async function cleanupKnowledgeStorageFiles(
+  supabase: SupabaseLikeClient,
+  bucketName: string,
+  storagePath: string,
+): Promise<void> {
+  try {
+    const { error: removeError } = await supabase.storage
+      .from(bucketName)
+      .remove([storagePath])
+
+    if (removeError) {
+      console.error('[knowledge:sources] Failed to delete storage file', {
+        bucketName,
+        storagePath,
+        removeError: removeError.message,
+      })
+      return
+    }
+
+    console.info('[knowledge:sources] Storage file cleaned up', {
+      bucketName,
+      storagePath,
+    })
+  } catch (storageError) {
+    console.error('[knowledge:sources] Storage cleanup threw unexpectedly', {
+      bucketName,
+      storagePath,
+      error: storageError instanceof Error ? storageError.message : String(storageError),
+    })
+  }
+}
+
+export async function getActiveKnowledgeSourceCount(
+  supabase: SupabaseLikeClient,
+  clinicId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('knowledge_sources')
+    .select('id', { count: 'exact', head: true })
+    .eq('clinic_id', clinicId)
+    .neq('source_type', 'faq')
+    .neq('status', 'disabled')
+
+  if (error) {
+    console.error('[knowledge:sources] Failed to count active knowledge sources', {
+      clinicId,
+      dbError: error.message,
+    })
+    throw error
+  }
+
+  return count ?? 0
 }
 
 function scoreLexicalChunk(row: KnowledgeSourceChunkSearchRow, keywords: string[]) {

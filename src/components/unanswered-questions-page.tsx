@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,9 +29,18 @@ interface UnansweredQuestion {
   conversationId: string | null
   question: string
   sourcePage: string | null
+  reason: string | null
   status: 'open' | 'answered' | 'ignored'
   answer: string | null
   createdAt: string
+}
+
+const REASON_LABELS: Record<string, string> = {
+  no_relevant_chunks: 'No matching knowledge',
+  unsupported_topic: 'Unsupported topic',
+  medical_diagnosis: 'Medical question',
+  service_not_found: 'Service not found',
+  price_not_found: 'Price not found',
 }
 
 export default function UnansweredQuestionsPage() {
@@ -42,14 +52,26 @@ export default function UnansweredQuestionsPage() {
   const [addToFaq, setAddToFaq] = useState(true)
   const [saving, setSaving] = useState(false)
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   const fetchRows = useCallback(async () => {
-    setLoading(true)
+    // Only show skeleton rows on the very first load.
+    // Background re-fetches keep existing data visible —
+    // same pattern as SWR revalidateOnFocus / TanStack Query refetchOnWindowFocus.
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const res = await fetch('/api/unanswered-questions')
       if (!res.ok) throw new Error('Failed to fetch')
       const data = await res.json()
       setRows(Array.isArray(data) ? data : [])
-    } catch {
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[UnansweredQuestionsPage] Failed to fetch rows', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load unanswered questions')
     } finally {
       setLoading(false)
@@ -62,6 +84,11 @@ export default function UnansweredQuestionsPage() {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [fetchRows])
+
+  // Re-fetch unanswered questions when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  // Disabled while the answer dialog is open to avoid disrupting the user.
+  useRefetchOnFocus(fetchRows, !open)
 
   const openAnswer = (row: UnansweredQuestion) => {
     setActive(row)
@@ -89,12 +116,21 @@ export default function UnansweredQuestionsPage() {
         }),
       })
       if (!res.ok) throw new Error('Failed to save answer')
-      toast.success(addToFaq ? 'Answer saved and added to FAQ' : 'Answer saved')
+      const data = await res.json()
+      if (data.warning) {
+        toast.warning(data.warning)
+      } else {
+        toast.success(addToFaq ? 'Answer saved and added to FAQ' : 'Answer saved')
+      }
       setOpen(false)
       setActive(null)
       setAnswer('')
       fetchRows()
-    } catch {
+    } catch (error) {
+      console.error('[UnansweredQuestionsPage] Failed to save answer', {
+        questionId: active.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to save answer')
     } finally {
       setSaving(false)
@@ -111,7 +147,11 @@ export default function UnansweredQuestionsPage() {
       if (!res.ok) throw new Error('Failed to ignore')
       toast.success('Question ignored')
       fetchRows()
-    } catch {
+    } catch (error) {
+      console.error('[UnansweredQuestionsPage] Failed to ignore question', {
+        questionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to ignore question')
     }
   }
@@ -150,7 +190,14 @@ export default function UnansweredQuestionsPage() {
             ) : rows.length > 0 ? (
               rows.map((row) => (
                 <TableRow key={row.id}>
-                  <TableCell className="font-medium">{row.question}</TableCell>
+                  <TableCell className="font-medium">
+                    <div>{row.question}</div>
+                    {row.reason && (
+                      <Badge variant="outline" className="mt-1 inline-flex text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {REASON_LABELS[row.reason] || row.reason}
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{row.sourcePage || '—'}</TableCell>
                   <TableCell>
                     <Badge

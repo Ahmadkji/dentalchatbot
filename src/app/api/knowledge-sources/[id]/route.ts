@@ -6,8 +6,13 @@ import {
   getKnowledgeSourceForClinic,
   mapKnowledgeSource,
   updateKnowledgeSourceDraft,
+  hardDeleteKnowledgeSource,
+  cleanupKnowledgeStorageFiles,
 } from '@/lib/knowledge/sources'
 import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+import { enforceRateLimit } from '@/lib/rate-limit-guard'
+import { getClientIp } from '@/lib/security'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 const sourceStatuses = ['draft', 'queued', 'processing', 'trained', 'failed', 'needs_review', 'disabled'] as const
 type SourceStatus = (typeof sourceStatuses)[number]
@@ -34,6 +39,15 @@ export async function PATCH(
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
 
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-source-patch:${current.clinic.id}:${ip}`,
+      limit: 30,
+      windowMs: 10 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
+
     const { id } = await params
     const existing = await getKnowledgeSourceForClinic(supabase, current.clinic.id, id)
     if (!existing) {
@@ -44,6 +58,26 @@ export async function PATCH(
     const nextTitle = body?.title !== undefined ? String(body.title).trim() : existing.title
     const nextContent = body?.content !== undefined ? String(body.content).trim() : existing.content
     let accepted = false
+
+    const shouldQueueProcessing = body?.content !== undefined || body?.retrain === true
+    const fileMetadata =
+      existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
+        ? (existing.metadata as Record<string, unknown>)
+        : {}
+    const fileStoragePath =
+      typeof fileMetadata.storagePath === 'string' ? fileMetadata.storagePath.trim() : ''
+    const fileName = typeof existing.file_name === 'string' ? existing.file_name.trim() : ''
+    const fileMimeType = typeof existing.file_type === 'string' ? existing.file_type.trim() : ''
+
+    if (shouldQueueProcessing && existing.source_type === 'file_upload' && (!fileStoragePath || !fileName || !fileMimeType)) {
+      return NextResponse.json(
+        {
+          error:
+            'This file source is missing upload metadata (storage path, file name, or mime type). Please upload the file again before retraining.',
+        },
+        { status: 409 },
+      )
+    }
 
     if (body?.refresh === true && existing.source_type === 'website_url' && existing.source_url) {
       await updateKnowledgeSourceDraft(supabase, current.clinic.id, id, {
@@ -63,7 +97,12 @@ export async function PATCH(
         },
       })
 
-      after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-source-refresh' }).catch(() => {}))
+      after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-source-refresh' }).catch((bgError) => {
+            console.error('[knowledge-sources:refresh-single] Background job processing failed', {
+              runner: 'api-source-refresh',
+              error: bgError instanceof Error ? bgError.message : String(bgError),
+            })
+          }))
       accepted = true
     } else {
       const updateData: Record<string, unknown> = {}
@@ -73,7 +112,7 @@ export async function PATCH(
       if (body?.sourceUrl !== undefined) updateData.sourceUrl = body.sourceUrl ? String(body.sourceUrl) : null
       if (isSourceStatus(body?.status)) updateData.status = body.status
       if (body?.isActive !== undefined) updateData.isActive = Boolean(body.isActive)
-      if (body?.content !== undefined || body?.retrain === true) {
+      if (shouldQueueProcessing) {
         updateData.status = 'queued'
         updateData.failedReason = null
       }
@@ -82,7 +121,7 @@ export async function PATCH(
         await updateKnowledgeSourceDraft(supabase, current.clinic.id, id, updateData)
       }
 
-      if (body?.content !== undefined || body?.retrain === true) {
+      if (shouldQueueProcessing) {
         const nextSourceUrl =
           body?.sourceUrl !== undefined ? (body.sourceUrl ? String(body.sourceUrl) : null) : existing.source_url
 
@@ -98,9 +137,10 @@ export async function PATCH(
           payload:
             existing.source_type === 'file_upload'
               ? {
-                  ...(existing.metadata ?? {}),
-                  fileName: existing.file_name,
-                  mimeType: existing.file_type,
+                  ...fileMetadata,
+                  storagePath: fileStoragePath,
+                  fileName,
+                  mimeType: fileMimeType,
                 }
               : existing.source_type === 'website_url' && body?.retrain === true
                 ? {
@@ -112,7 +152,12 @@ export async function PATCH(
                   },
         })
 
-        after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-source-update' }).catch(() => {}))
+        after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-source-update' }).catch((bgError) => {
+                console.error('[knowledge-sources:update-single] Background job processing failed', {
+                  runner: 'api-source-update',
+                  error: bgError instanceof Error ? bgError.message : String(bgError),
+                })
+              }))
         accepted = true
       }
     }
@@ -120,13 +165,16 @@ export async function PATCH(
     const updated = await getKnowledgeSourceForClinic(supabase, current.clinic.id, id)
     return NextResponse.json(updated ? mapKnowledgeSource(updated) : null, { status: accepted ? 202 : 200 })
   } catch (error) {
-    console.error('Error updating knowledge source:', error)
+    console.error('[knowledge-sources:update-single] Failed to update knowledge source', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update knowledge source' }, { status: 500 })
   }
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -143,17 +191,89 @@ export async function DELETE(
       return NextResponse.json({ error: 'Only owners and admins can manage knowledge sources.' }, { status: 403 })
     }
 
+    const ip = getClientIp(request.headers)
+    const rl = await enforceRateLimit({
+      key: `ks-source-delete:${current.clinic.id}:${ip}`,
+      limit: 20,
+      windowMs: 10 * 60 * 1000,
+      failOpen: false,
+    })
+    if (rl) return rl
+
     const { id } = await params
     const existing = await getKnowledgeSourceForClinic(supabase, current.clinic.id, id)
     if (!existing) {
       return NextResponse.json({ error: 'Knowledge source not found' }, { status: 404 })
     }
 
-    await disableKnowledgeSource(supabase, id)
+    // Block deletion while source is being actively processed to prevent race condition
+    // with background job queue (the job would fail mid-flight with "source not found")
+    if (existing.status === 'processing' || existing.status === 'queued') {
+      return NextResponse.json(
+        { error: 'Cannot delete a source that is currently being processed. Please wait for it to finish.' },
+        { status: 409 },
+      )
+    }
 
-    return NextResponse.json({ message: 'Knowledge source deleted successfully' })
+    // FAQ-linked sources use soft-disable (FAQ entry survives with knowledge_source_id = null)
+    // Non-FAQ sources use hard delete (CASCADE removes chunks, files, runs)
+    if (existing.source_type === 'faq') {
+      await disableKnowledgeSource(supabase, id)
+      console.info('[knowledge-sources:delete] FAQ-linked source soft-disabled', {
+        sourceId: id,
+        clinicId: current.clinic.id,
+        userId: user.id,
+      })
+      return NextResponse.json({ message: 'FAQ knowledge source disabled successfully' })
+    }
+
+    // Hard delete with CASCADE
+    // Use authenticated client — the RPC has its own SECURITY DEFINER auth+role checks
+    // via auth.uid() and has_clinic_role() which require a real user session
+    const deleteResult = await hardDeleteKnowledgeSource(supabase, id)
+
+    // Schedule background storage file cleanup using admin client
+    // (storage operations bypass RLS and don't need user auth)
+    if (deleteResult.storagePath && deleteResult.bucketName) {
+      const adminClient = createSupabaseAdminClient()
+      after(() =>
+        cleanupKnowledgeStorageFiles(adminClient, deleteResult.bucketName!, deleteResult.storagePath!).catch(
+          (bgError) => {
+            console.error('[knowledge-sources:delete] Storage file cleanup failed', {
+              sourceId: id,
+              storagePath: deleteResult.storagePath,
+              error: bgError instanceof Error ? bgError.message : String(bgError),
+            })
+          },
+        ),
+      )
+    }
+
+    console.info('[knowledge-sources:delete] Knowledge source permanently deleted', {
+      sourceId: id,
+      clinicId: current.clinic.id,
+      userId: user.id,
+      sourceType: deleteResult.sourceType,
+      deletedChunks: deleteResult.deletedChunks,
+    })
+
+    return NextResponse.json({
+      message: 'Knowledge source deleted permanently',
+      deletedChunks: deleteResult.deletedChunks,
+    })
   } catch (error) {
-    console.error('Error deleting knowledge source:', error)
+    const message = error instanceof Error ? error.message : String(error)
+
+    // Gracefully handle double-delete: if the source was already deleted by another request,
+    // the RPC raises 'Knowledge source not found.' — return 404 instead of 500
+    if (message.includes('not found')) {
+      return NextResponse.json({ error: 'Knowledge source not found' }, { status: 404 })
+    }
+
+    console.error('[knowledge-sources:delete] Failed to delete knowledge source', {
+      userId: user.id,
+      error: message,
+    })
     return NextResponse.json({ error: 'Failed to delete knowledge source' }, { status: 500 })
   }
 }

@@ -1,15 +1,20 @@
 import 'server-only'
 
 import { createHash, timingSafeEqual } from 'node:crypto'
+import { extractWebsiteAutofill } from '@/lib/ai/website-autofill'
 import {
   extractTextFromUploadedFile,
+  crawlHomepageContent,
   importSitemapContent,
   importWebsiteContent,
+  normalizeKnowledgeImportUrlForStorage,
 } from '@/lib/knowledge-import'
 import {
   createKnowledgeSourceDraft,
   findKnowledgeSourceByUrl,
+  getActiveKnowledgeSourceCount,
   getKnowledgeSourceForClinic,
+  MAX_KNOWLEDGE_SOURCES_PER_CLINIC,
   syncKnowledgeSourceContent,
   type SupabaseLikeClient,
   updateKnowledgeSourceDraft,
@@ -18,6 +23,7 @@ import {
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 const KNOWLEDGE_BUCKET = 'clinic-knowledge'
+const MAX_HOMEPAGE_PAGES = 5
 const MAX_SITEMAP_PAGES = 10
 const DEFAULT_RETRY_DELAY_SECONDS = 120
 const STAGGERED_RETRY_DELAYS_SECONDS = [120, 300, 900]
@@ -45,6 +51,11 @@ export interface KnowledgeJobRow {
   locked_at: string | null
   locked_by: string | null
   last_error: string | null
+  total_pages?: number
+  processed_pages?: number
+  failed_pages?: number
+  current_page_url?: string | null
+  progress_updated_at?: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -58,6 +69,10 @@ function normalizeMetadata(metadata: unknown) {
 
 function asString(value: unknown) {
   return typeof value === 'string' ? value : ''
+}
+
+function normalizeProgressNumber(value: number | null | undefined) {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : 0
 }
 
 function isFilePayload(payload: Record<string, unknown>) {
@@ -75,6 +90,130 @@ function buildTemporaryWebsiteTitle(url: string) {
   } catch {
     return 'Imported website'
   }
+}
+
+async function optimizeImportedWebsitePage(page: { url: string; title: string; content: string }) {
+  try {
+    const autofill = await extractWebsiteAutofill({
+      websiteUrl: page.url,
+      title: page.title,
+      text: page.content,
+    })
+
+    return {
+      title: autofill.knowledge.title || page.title,
+      content: [
+        `## Summary\n${autofill.knowledge.summary}`,
+        `## Optimized Content\n${autofill.knowledge.optimizedContent}`,
+      ].join('\n\n'),
+      metadata: {
+        aiOptimized: true,
+        aiNeedsReview: autofill.flags.needsReview,
+        aiReasons: autofill.flags.reasons,
+        aiSourceEvidence: autofill.knowledge.sourceEvidence,
+      },
+      warnings: autofill.flags.reasons,
+    }
+  } catch (error) {
+    console.warn('[knowledge-jobs] Website AI optimization failed, keeping raw page content', {
+      url: page.url,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
+    return {
+      title: page.title,
+      content: page.content,
+      metadata: {
+        aiOptimized: false,
+        aiError: error instanceof Error ? error.message : String(error),
+      },
+      warnings: ['Website content was imported without AI optimization.'],
+    }
+  }
+}
+
+async function upsertCrawledWebsitePage(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  job: KnowledgeJobRow,
+  page: { url: string; title: string; content: string },
+  metadata: Record<string, unknown>,
+  sourceId?: string | null,
+) {
+  const canonicalUrl = normalizeKnowledgeImportUrlForStorage(page.url)
+  const optimized = await optimizeImportedWebsitePage({
+    ...page,
+    url: canonicalUrl,
+  })
+
+  const existing = sourceId
+    ? await getKnowledgeSourceForClinic(admin, job.clinic_id, sourceId)
+    : await findKnowledgeSourceByUrl(admin, job.clinic_id, canonicalUrl)
+
+  if (existing) {
+    await updateKnowledgeSourceDraft(admin, job.clinic_id, existing.id, {
+      title: optimized.title,
+      content: optimized.content,
+      sourceUrl: canonicalUrl,
+      status: 'processing',
+      failedReason: null,
+      isActive: true,
+      metadata: {
+        ...normalizeMetadata(existing.metadata),
+        ...metadata,
+        ...optimized.metadata,
+        importedUrl: canonicalUrl,
+      },
+    })
+
+    await syncKnowledgeSourceContent(admin, {
+      sourceId: existing.id,
+      title: optimized.title,
+      content: optimized.content,
+      sourceType: 'website_url',
+      sourceUrl: canonicalUrl,
+      pageTitle: optimized.title,
+    })
+
+    return existing.id
+  }
+
+  // Check source limit before creating a new source (duplicates update in-place, so they're fine)
+  const currentCount = await getActiveKnowledgeSourceCount(admin, job.clinic_id)
+  if (currentCount >= MAX_KNOWLEDGE_SOURCES_PER_CLINIC) {
+    console.warn('[knowledge-jobs:upsert] Skipping new source — limit reached', {
+      clinicId: job.clinic_id,
+      pageUrl: canonicalUrl,
+      currentCount,
+      limit: MAX_KNOWLEDGE_SOURCES_PER_CLINIC,
+    })
+    return null
+  }
+
+  const created = await createKnowledgeSourceDraft(admin, {
+    clinicId: job.clinic_id,
+    title: optimized.title || buildTemporaryWebsiteTitle(canonicalUrl),
+    sourceType: 'website_url',
+    content: optimized.content,
+    sourceUrl: canonicalUrl,
+    createdBy: job.created_by,
+    metadata: {
+      ...metadata,
+      ...optimized.metadata,
+      importedUrl: canonicalUrl,
+    },
+    status: 'processing',
+  })
+
+  await syncKnowledgeSourceContent(admin, {
+    sourceId: created.id,
+    title: optimized.title || created.title,
+    content: optimized.content,
+    sourceType: 'website_url',
+    sourceUrl: canonicalUrl,
+    pageTitle: optimized.title || created.title,
+  })
+
+  return created.id
 }
 
 export function normalizeKnowledgeJobLimit(limit: number | null | undefined) {
@@ -136,6 +275,68 @@ export async function enqueueKnowledgeJob(
   return data as KnowledgeJobRow
 }
 
+export async function getKnowledgeJobForClinic(
+  supabase: SupabaseLikeClient,
+  clinicId: string,
+  jobId: string,
+) {
+  const { data, error } = await supabase
+    .from('knowledge_job_queue')
+    .select('*')
+    .eq('clinic_id', clinicId)
+    .eq('id', jobId)
+    .maybeSingle()
+
+  if (error) {
+    throw error
+  }
+
+  return (data as KnowledgeJobRow | null) ?? null
+}
+
+export function mapKnowledgeJobProgress(job: KnowledgeJobRow) {
+  return {
+    id: job.id,
+    sourceId: job.source_id,
+    jobType: job.job_type,
+    status: job.status,
+    totalPages: normalizeProgressNumber(job.total_pages),
+    processedPages: normalizeProgressNumber(job.processed_pages),
+    failedPages: normalizeProgressNumber(job.failed_pages),
+    currentPageUrl: job.current_page_url,
+    progressUpdatedAt: job.progress_updated_at,
+  }
+}
+
+async function updateKnowledgeJobProgress(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  jobId: string,
+  patch: Partial<{
+    totalPages: number
+    processedPages: number
+    failedPages: number
+    currentPageUrl: string | null
+  }>,
+) {
+  const updateData: Record<string, unknown> = {
+    progress_updated_at: new Date().toISOString(),
+  }
+
+  if (patch.totalPages !== undefined) updateData.total_pages = normalizeProgressNumber(patch.totalPages)
+  if (patch.processedPages !== undefined) updateData.processed_pages = normalizeProgressNumber(patch.processedPages)
+  if (patch.failedPages !== undefined) updateData.failed_pages = normalizeProgressNumber(patch.failedPages)
+  if (patch.currentPageUrl !== undefined) updateData.current_page_url = patch.currentPageUrl
+
+  const { error } = await admin
+    .from('knowledge_job_queue')
+    .update(updateData)
+    .eq('id', jobId)
+
+  if (error) {
+    throw error
+  }
+}
+
 async function claimKnowledgeJobs(limit: number, runner: string) {
   const admin = createSupabaseAdminClient()
   const { data, error } = await admin.rpc('claim_knowledge_jobs', {
@@ -191,6 +392,11 @@ async function markJobFailed(
   if (retry) {
     const retryDelay = getKnowledgeJobRetryDelaySeconds(job.attempt_count)
     payload.available_at = new Date(Date.now() + retryDelay * 1000).toISOString()
+    payload.total_pages = 0
+    payload.processed_pages = 0
+    payload.failed_pages = 0
+    payload.current_page_url = null
+    payload.progress_updated_at = new Date().toISOString()
   }
 
   const { error } = await admin
@@ -266,35 +472,85 @@ async function processWebsiteImportJob(
   }
 
   const payload = normalizeMetadata(job.payload)
-  const targetUrl = asString(payload.url).trim() || source.source_url || ''
-  if (!targetUrl) {
+  const rawTargetUrl = asString(payload.url).trim() || source.source_url || ''
+  if (!rawTargetUrl) {
     throw new Error('Website URL is missing for this knowledge import.')
   }
+  const targetUrl = normalizeKnowledgeImportUrlForStorage(rawTargetUrl)
 
-  const imported = await importWebsiteContent(targetUrl)
+  const importMode = asString(payload.importMode).trim() === 'homepage' ? 'homepage' : 'website'
 
-  await updateKnowledgeSourceDraft(admin, job.clinic_id, source.id, {
+  if (importMode === 'homepage') {
+    const imported = await crawlHomepageContent(targetUrl, MAX_HOMEPAGE_PAGES, {
+      onProgress: async (progress) => {
+        await updateKnowledgeJobProgress(admin, job.id, progress)
+      },
+    })
+    const [homepagePage, ...linkedPages] = imported.pages
+
+    if (!homepagePage) {
+      throw new Error('No readable text found on website')
+    }
+
+    await upsertCrawledWebsitePage(
+      admin,
+      job,
+      homepagePage,
+      {
+        ...payload,
+        importMode: 'homepage',
+        parentJobId: job.id,
+      },
+      source.id,
+    )
+
+    for (const page of linkedPages) {
+      await upsertCrawledWebsitePage(admin, job, page, {
+        ...payload,
+        importMode: 'homepage',
+        parentJobId: job.id,
+      })
+    }
+
+    return
+  }
+
+  const imported = await importWebsiteContent(targetUrl, {
+    onProgress: async (progress) => {
+      await updateKnowledgeJobProgress(admin, job.id, progress)
+    },
+  })
+  const optimized = await optimizeImportedWebsitePage({
+    url: imported.url,
     title: imported.title,
     content: imported.content,
-    sourceUrl: imported.url,
+  })
+
+  await updateKnowledgeSourceDraft(admin, job.clinic_id, source.id, {
+    title: optimized.title,
+    content: optimized.content,
+    sourceUrl: normalizeKnowledgeImportUrlForStorage(imported.url),
     status: 'processing',
     failedReason: null,
     isActive: true,
     metadata: {
       ...normalizeMetadata(source.metadata),
       ...payload,
-      importedUrl: imported.url,
+      ...optimized.metadata,
+      importedUrl: normalizeKnowledgeImportUrlForStorage(imported.url),
+      importMode: 'website',
     },
   })
 
   await syncKnowledgeSourceContent(admin, {
     sourceId: source.id,
-    title: imported.title,
-    content: imported.content,
+    title: optimized.title,
+    content: optimized.content,
     sourceType: 'website_url',
-    sourceUrl: imported.url,
-    pageTitle: imported.title,
+    sourceUrl: normalizeKnowledgeImportUrlForStorage(imported.url),
+    pageTitle: optimized.title,
   })
+
 }
 
 async function processFileJob(
@@ -375,15 +631,34 @@ async function processSitemapJob(
   job: KnowledgeJobRow,
 ) {
   const payload = normalizeMetadata(job.payload)
-  const sitemapUrl = asString(payload.sitemapUrl).trim()
-  if (!sitemapUrl) {
+  const rawSitemapUrl = asString(payload.sitemapUrl).trim()
+  if (!rawSitemapUrl) {
     throw new Error('Sitemap URL is missing for this job.')
   }
+  const sitemapUrl = normalizeKnowledgeImportUrlForStorage(rawSitemapUrl)
 
-  const imported = await importSitemapContent(sitemapUrl, MAX_SITEMAP_PAGES)
+  const imported = await importSitemapContent(sitemapUrl, MAX_SITEMAP_PAGES, {
+    onProgress: async (progress) => {
+      await updateKnowledgeJobProgress(admin, job.id, progress)
+    },
+  })
 
   for (const page of imported.pages) {
     const duplicate = await findKnowledgeSourceByUrl(admin, job.clinic_id, page.url)
+
+    // Skip creating new sources if the clinic has hit the limit (duplicates are fine — they update in-place)
+    if (!duplicate) {
+      const currentCount = await getActiveKnowledgeSourceCount(admin, job.clinic_id)
+      if (currentCount >= MAX_KNOWLEDGE_SOURCES_PER_CLINIC) {
+        console.warn('[knowledge:jobs:sitemap] Skipping page — source limit reached', {
+          clinicId: job.clinic_id,
+          pageUrl: page.url,
+          currentCount,
+          limit: MAX_KNOWLEDGE_SOURCES_PER_CLINIC,
+        })
+        continue
+      }
+    }
 
     if (duplicate) {
       await updateKnowledgeSourceDraft(admin, job.clinic_id, duplicate.id, {
@@ -395,8 +670,8 @@ async function processSitemapJob(
         isActive: true,
         metadata: {
           ...normalizeMetadata(duplicate.metadata),
-          sitemapUrl: imported.sitemapUrl,
-          importedUrl: page.url,
+          sitemapUrl: normalizeKnowledgeImportUrlForStorage(imported.sitemapUrl),
+          importedUrl: normalizeKnowledgeImportUrlForStorage(page.url),
           importMode: 'sitemap',
         },
       })
@@ -409,33 +684,33 @@ async function processSitemapJob(
         sourceUrl: page.url,
         pageTitle: page.title,
       })
-      continue
+    } else {
+      const created = await createKnowledgeSourceDraft(admin, {
+        clinicId: job.clinic_id,
+        title: page.title || buildTemporaryWebsiteTitle(page.url),
+        sourceType: 'website_url',
+        content: page.content,
+        sourceUrl: page.url,
+        createdBy: job.created_by,
+        metadata: {
+          sitemapUrl: normalizeKnowledgeImportUrlForStorage(imported.sitemapUrl),
+          importedUrl: normalizeKnowledgeImportUrlForStorage(page.url),
+          importMode: 'sitemap',
+          parentJobId: job.id,
+        },
+        status: 'processing',
+      })
+
+      await syncKnowledgeSourceContent(admin, {
+        sourceId: created.id,
+        title: created.title,
+        content: page.content,
+        sourceType: 'website_url',
+        sourceUrl: page.url,
+        pageTitle: page.title || created.title,
+      })
     }
 
-    const created = await createKnowledgeSourceDraft(admin, {
-      clinicId: job.clinic_id,
-      title: page.title || buildTemporaryWebsiteTitle(page.url),
-      sourceType: 'website_url',
-      content: page.content,
-      sourceUrl: page.url,
-      createdBy: job.created_by,
-      metadata: {
-        sitemapUrl: imported.sitemapUrl,
-        importedUrl: page.url,
-        importMode: 'sitemap',
-        parentJobId: job.id,
-      },
-      status: 'processing',
-    })
-
-    await syncKnowledgeSourceContent(admin, {
-      sourceId: created.id,
-      title: created.title,
-      content: page.content,
-      sourceType: 'website_url',
-      sourceUrl: page.url,
-      pageTitle: page.title || created.title,
-    })
   }
 }
 
@@ -482,8 +757,25 @@ export async function processQueuedKnowledgeJobs(input?: {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to process knowledge job.'
       const retry = shouldRetryKnowledgeJob(job, error)
-      await updateSourceFailure(admin, job.clinic_id, job.source_id, message)
-      await markJobFailed(admin, job, message, retry)
+      console.error('[knowledge-jobs] Job processing failed', {
+        jobId: job.id,
+        sourceId: job.source_id,
+        clinicId: job.clinic_id,
+        jobType: job.job_type,
+        attempt: job.attempt_count,
+        willRetry: retry,
+        error: message,
+      })
+      try {
+        await updateSourceFailure(admin, job.clinic_id, job.source_id, message)
+        await markJobFailed(admin, job, message, retry)
+      } catch (dbError) {
+        console.error('[knowledge-jobs] Failed to record job failure in DB', {
+          jobId: job.id,
+          originalError: message,
+          dbError: dbError instanceof Error ? dbError.message : String(dbError),
+        })
+      }
       if (retry) {
         retried += 1
       } else {

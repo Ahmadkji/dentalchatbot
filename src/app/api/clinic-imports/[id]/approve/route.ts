@@ -41,7 +41,10 @@ export async function POST(
 
     return NextResponse.json(approved)
   } catch (error) {
-    console.error('Error approving clinic import session:', error)
+    console.error('[clinic-imports:approve] Failed to approve clinic import session', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to approve clinic import.' },
       { status: 500 },

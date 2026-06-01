@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+
+const appointmentPatchSchema = z.object({
+  status: z.enum(['requested', 'confirmed', 'cancelled', 'completed', 'no_show']).optional(),
+  name: z.string().trim().max(160).optional(),
+  phone: z.string().trim().max(40).optional(),
+  preferredDate: z.string().trim().max(32).optional(),
+  preferredTime: z.string().trim().max(32).optional(),
+  reason: z.string().trim().max(2000).optional(),
+  preferredDoctor: z.string().trim().max(160).optional(),
+}).strict()
 
 export async function PATCH(
   request: NextRequest,
@@ -10,6 +21,7 @@ export async function PATCH(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
     const current = await getCurrentClinic(supabase, user)
@@ -17,9 +29,11 @@ export async function PATCH(
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
 
-    const { id } = await params
-    const body = await request.json()
-    const { status, name, phone, preferredDate, preferredTime, reason, preferredDoctor } = body
+    const body = await request.json().catch(() => null)
+    const parsed = appointmentPatchSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+    }
 
     const adminClient = createSupabaseAdminClient()
 
@@ -37,13 +51,13 @@ export async function PATCH(
     }
 
     const updateData: Record<string, unknown> = {}
-    if (status !== undefined) updateData.status = status
-    if (name !== undefined) updateData.name = name
-    if (phone !== undefined) updateData.phone = phone
-    if (preferredDate !== undefined) updateData.preferred_date = preferredDate
-    if (preferredTime !== undefined) updateData.preferred_time = preferredTime
-    if (reason !== undefined) updateData.reason = reason
-    if (preferredDoctor !== undefined) updateData.preferred_doctor = preferredDoctor
+    if (parsed.data.status !== undefined) updateData.status = parsed.data.status
+    if (parsed.data.name !== undefined) updateData.name = parsed.data.name
+    if (parsed.data.phone !== undefined) updateData.phone = parsed.data.phone
+    if (parsed.data.preferredDate !== undefined) updateData.preferred_date = parsed.data.preferredDate
+    if (parsed.data.preferredTime !== undefined) updateData.preferred_time = parsed.data.preferredTime
+    if (parsed.data.reason !== undefined) updateData.reason = parsed.data.reason
+    if (parsed.data.preferredDoctor !== undefined) updateData.preferred_doctor = parsed.data.preferredDoctor
 
     const { data: appointmentRequest, error } = await adminClient
       .from('appointment_requests')
@@ -56,7 +70,11 @@ export async function PATCH(
 
     return NextResponse.json(appointmentRequest)
   } catch (error) {
-    console.error('Error updating appointment request:', error)
+    console.error('[appointment-requests:PATCH] Failed to update appointment request', {
+      appointmentRequestId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update appointment request' }, { status: 500 })
   }
 }
@@ -68,14 +86,13 @@ export async function DELETE(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
     const current = await getCurrentClinic(supabase, user)
     if (!current.clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
-
-    const { id } = await params
 
     const adminClient = createSupabaseAdminClient()
 
@@ -100,7 +117,11 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error deleting appointment request:', error)
+    console.error('[appointment-requests:DELETE] Failed to delete appointment request', {
+      appointmentRequestId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to delete appointment request' }, { status: 500 })
   }
 }

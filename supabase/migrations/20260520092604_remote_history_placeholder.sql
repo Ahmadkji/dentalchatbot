@@ -1,0 +1,4 @@
+-- Remote history placeholder.
+-- This file exists only to align local migration history with the linked
+-- Supabase project, which already records version 20260520092604.
+-- Intentionally no-op.

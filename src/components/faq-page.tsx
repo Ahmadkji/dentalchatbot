@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Table,
   TableBody,
@@ -25,6 +25,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -40,6 +50,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 
 interface FAQ {
   id: string
@@ -80,19 +91,30 @@ export default function FAQPage() {
   const [editingFAQ, setEditingFAQ] = useState<FAQ | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [faqToDelete, setFaqToDelete] = useState<FAQ | null>(null)
+  const [pendingAction, setPendingAction] = useState<{ id: string; type: 'toggle' | 'delete' | 'move' } | null>(null)
+
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
 
   const fetchFAQs = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const res = await fetch('/api/faq')
-      if (res.ok) {
-        const data = await res.json()
-        const faqList = data.faqs || data || []
-        // Sort by order
-        faqList.sort((a: FAQ, b: FAQ) => (a.order || 0) - (b.order || 0))
-        setFaqs(faqList)
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to load FAQs')
+      const data = await res.json()
+      const faqList = data.faqs || data || []
+      // Sort by order
+      faqList.sort((a: FAQ, b: FAQ) => (a.order || 0) - (b.order || 0))
+      setFaqs(faqList)
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[FAQPage] Failed to fetch FAQs', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load FAQs')
     } finally {
       setLoading(false)
@@ -100,35 +122,16 @@ export default function FAQPage() {
   }, [])
 
   useEffect(() => {
-    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void fetchFAQs()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchFAQs])
 
-    const loadFAQs = async () => {
-      setLoading(true)
-      try {
-        const res = await fetch('/api/faq')
-        if (!cancelled && res.ok) {
-          const data = await res.json()
-          const faqList = data.faqs || data || []
-          faqList.sort((a: FAQ, b: FAQ) => (a.order || 0) - (b.order || 0))
-          setFaqs(faqList)
-        }
-      } catch {
-        if (!cancelled) {
-          toast.error('Failed to load FAQs')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    void loadFAQs()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // Re-fetch FAQs when user switches back to this tab.
+  // Disabled while any dialog is open to avoid overwriting form state.
+  const anyDialogOpen = addDialogOpen || editDialogOpen || deleteDialogOpen
+  useRefetchOnFocus(fetchFAQs, !anyDialogOpen)
 
   const filteredFAQs = faqs.filter(
     (f) =>
@@ -156,15 +159,15 @@ export default function FAQPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (res.ok) {
-        toast.success('FAQ added successfully')
-        setAddDialogOpen(false)
-        setForm(emptyForm)
-        fetchFAQs()
-      } else {
-        toast.error('Failed to add FAQ')
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to add FAQ')
+      toast.success('FAQ added successfully')
+      setAddDialogOpen(false)
+      setForm(emptyForm)
+      fetchFAQs()
+    } catch (error) {
+      console.error('[FAQPage] Failed to add FAQ', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to add FAQ')
     } finally {
       setSubmitting(false)
@@ -188,16 +191,17 @@ export default function FAQPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
-      if (res.ok) {
-        toast.success('FAQ updated successfully')
-        setEditDialogOpen(false)
-        setEditingFAQ(null)
-        setForm(emptyForm)
-        fetchFAQs()
-      } else {
-        toast.error('Failed to update FAQ')
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to update FAQ')
+      toast.success('FAQ updated successfully')
+      setEditDialogOpen(false)
+      setEditingFAQ(null)
+      setForm(emptyForm)
+      fetchFAQs()
+    } catch (error) {
+      console.error('[FAQPage] Failed to update FAQ', {
+        faqId: editingFAQ?.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update FAQ')
     } finally {
       setSubmitting(false)
@@ -205,76 +209,87 @@ export default function FAQPage() {
   }
 
   const handleToggleActive = async (faq: FAQ) => {
+    setPendingAction({ id: faq.id, type: 'toggle' })
     try {
       const res = await fetch(`/api/faq/${faq.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isActive: !faq.isActive }),
       })
-      if (res.ok) {
-        toast.success(`FAQ ${faq.isActive ? 'deactivated' : 'activated'}`)
-        fetchFAQs()
-      } else {
-        toast.error('Failed to update FAQ')
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to update FAQ')
+      toast.success(`FAQ ${faq.isActive ? 'deactivated' : 'activated'}`)
+      fetchFAQs()
+    } catch (error) {
+      console.error('[FAQPage] Failed to toggle FAQ active state', {
+        faqId: faq.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update FAQ')
+    } finally {
+      setPendingAction(null)
     }
   }
 
-  const handleDelete = async (id: string) => {
+  const requestDelete = (faq: FAQ) => {
+    setFaqToDelete(faq)
+    setDeleteDialogOpen(true)
+  }
+
+  const confirmDelete = async () => {
+    if (!faqToDelete) return
+    setPendingAction({ id: faqToDelete.id, type: 'delete' })
     try {
-      const res = await fetch(`/api/faq/${id}`, { method: 'DELETE' })
-      if (res.ok) {
-        toast.success('FAQ deleted')
-        fetchFAQs()
-      } else {
-        toast.error('Failed to delete FAQ')
-      }
-    } catch {
+      const res = await fetch(`/api/faq/${faqToDelete.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete FAQ')
+      toast.success('FAQ deleted')
+      setDeleteDialogOpen(false)
+      setFaqToDelete(null)
+      fetchFAQs()
+    } catch (error) {
+      console.error('[FAQPage] Failed to delete FAQ', {
+        faqId: faqToDelete?.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to delete FAQ')
+    } finally {
+      setPendingAction(null)
     }
   }
 
-  const handleMoveUp = async (faq: FAQ, index: number) => {
-    if (index === 0) return
-    const prevFAQ = filteredFAQs[index - 1]
-    try {
-      await fetch(`/api/faq/${faq.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: prevFAQ.order }),
-      })
-      await fetch(`/api/faq/${prevFAQ.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: faq.order }),
-      })
-      toast.success('FAQ reordered')
-      fetchFAQs()
-    } catch {
-      toast.error('Failed to reorder FAQ')
+  const moveFaq = async (faq: FAQ, direction: 'up' | 'down') => {
+    if (search.trim()) {
+      toast.error('Clear search before reordering FAQs')
+      return
     }
-  }
 
-  const handleMoveDown = async (faq: FAQ, index: number) => {
-    if (index === filteredFAQs.length - 1) return
-    const nextFAQ = filteredFAQs[index + 1]
+    const currentIndex = faqs.findIndex((item) => item.id === faq.id)
+    if (currentIndex === -1) return
+
+    const swapWith = direction === 'up' ? faqs[currentIndex - 1] : faqs[currentIndex + 1]
+    if (!swapWith) return
+
+    setPendingAction({ id: faq.id, type: 'move' })
     try {
-      await fetch(`/api/faq/${faq.id}`, {
-        method: 'PATCH',
+      const res = await fetch('/api/faq/reorder', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: nextFAQ.order }),
+        body: JSON.stringify({ firstId: faq.id, secondId: swapWith.id }),
       })
-      await fetch(`/api/faq/${nextFAQ.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: faq.order }),
-      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to reorder FAQ')
+      }
       toast.success('FAQ reordered')
       fetchFAQs()
-    } catch {
-      toast.error('Failed to reorder FAQ')
+    } catch (error) {
+      console.error('[FAQPage] Failed to reorder FAQ', {
+        faqId: faq.id,
+        direction,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      toast.error(error instanceof Error ? error.message : 'Failed to reorder FAQ')
+    } finally {
+      setPendingAction(null)
     }
   }
 
@@ -416,8 +431,8 @@ export default function FAQPage() {
                             variant="ghost"
                             size="sm"
                             className="h-4 w-4 p-0"
-                            disabled={index === 0}
-                            onClick={() => handleMoveUp(faq, index)}
+                            disabled={index === 0 || Boolean(search.trim()) || !!pendingAction}
+                            onClick={() => moveFaq(faq, 'up')}
                           >
                             <ChevronUp className="size-3" />
                           </Button>
@@ -425,8 +440,8 @@ export default function FAQPage() {
                             variant="ghost"
                             size="sm"
                             className="h-4 w-4 p-0"
-                            disabled={index === filteredFAQs.length - 1}
-                            onClick={() => handleMoveDown(faq, index)}
+                            disabled={index === filteredFAQs.length - 1 || Boolean(search.trim()) || !!pendingAction}
+                            onClick={() => moveFaq(faq, 'down')}
                           >
                             <ChevronDown className="size-3" />
                           </Button>
@@ -450,15 +465,22 @@ export default function FAQPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEdit(faq)}>
+                          <DropdownMenuItem
+                            onClick={() => openEdit(faq)}
+                            disabled={!!pendingAction}
+                          >
                             <Pencil className="size-3.5 mr-2" />
                             Edit
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleToggleActive(faq)}>
+                          <DropdownMenuItem
+                            onClick={() => handleToggleActive(faq)}
+                            disabled={!!pendingAction}
+                          >
                             {faq.isActive ? 'Deactivate' : 'Activate'}
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => handleDelete(faq.id)}
+                            onClick={() => requestDelete(faq)}
+                            disabled={!!pendingAction}
                             className="text-destructive focus:text-destructive"
                           >
                             <Trash2 className="size-3.5 mr-2" />
@@ -503,6 +525,28 @@ export default function FAQPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove &ldquo;{faqToDelete?.question}&rdquo; and disable its linked knowledge source. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setFaqToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              disabled={pendingAction?.type === 'delete'}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {pendingAction?.type === 'delete' ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

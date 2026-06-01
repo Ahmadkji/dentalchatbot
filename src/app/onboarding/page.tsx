@@ -13,26 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Stethoscope, User, Building2, Globe, Loader2, ArrowRight, MapPin, Phone, MessageCircle, Link2 } from 'lucide-react'
-
-const timezones = [
-  'UTC',
-  'America/New_York',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'America/Toronto',
-  'Europe/London',
-  'Europe/Paris',
-  'Europe/Berlin',
-  'Asia/Karachi',
-  'Asia/Kolkata',
-  'Asia/Dubai',
-  'Asia/Shanghai',
-  'Asia/Tokyo',
-  'Asia/Seoul',
-  'Australia/Sydney',
-  'Pacific/Auckland',
-]
+import { COMMON_TIMEZONES, formatTimezoneLabel } from '@/lib/timezones'
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -189,9 +170,9 @@ export default function OnboardingPage() {
                   <SelectValue placeholder="Select your timezone" />
                 </SelectTrigger>
                 <SelectContent>
-                  {timezones.map((tz) => (
+                  {COMMON_TIMEZONES.map((tz) => (
                     <SelectItem key={tz} value={tz}>
-                      {tz.replace(/_/g, ' ')}
+                      {formatTimezoneLabel(tz)}
                     </SelectItem>
                   ))}
                 </SelectContent>

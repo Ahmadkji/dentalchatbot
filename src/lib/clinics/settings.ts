@@ -1,7 +1,7 @@
 import 'server-only'
 
-import { z } from 'zod'
 import type { createSupabaseRouteClient } from '@/lib/supabase/route-client'
+import { DEFAULT_LEAD_REQUIRED_FIELDS, serializeLeadRequiredFields } from '@/lib/leads/lead-gate-settings'
 
 type SupabaseRouteClient = NonNullable<Awaited<ReturnType<typeof createSupabaseRouteClient>>>
 
@@ -97,40 +97,10 @@ export const CLINIC_SETTING_DEFAULTS = [
     description: 'Enable visitor lead capture in the chatbot.',
   },
   {
-    key: 'lead_collect_email',
-    value: 'true',
+    key: 'lead_required_fields',
+    value: serializeLeadRequiredFields(DEFAULT_LEAD_REQUIRED_FIELDS),
     category: 'lead-collection',
-    description: 'Collect patient email addresses during lead capture.',
-  },
-  {
-    key: 'lead_collect_name',
-    value: 'true',
-    category: 'lead-collection',
-    description: 'Collect patient names during lead capture.',
-  },
-  {
-    key: 'lead_collect_phone',
-    value: 'true',
-    category: 'lead-collection',
-    description: 'Collect patient phone numbers during lead capture.',
-  },
-  {
-    key: 'lead_trigger_mode',
-    value: 'interest',
-    category: 'lead-collection',
-    description: 'Defines when lead capture should begin.',
-  },
-  {
-    key: 'lead_trigger_message_count',
-    value: '1',
-    category: 'lead-collection',
-    description: 'How many messages before lead capture can start.',
-  },
-  {
-    key: 'lead_trigger_keywords',
-    value: 'pricing, demo, consultation, quote, appointment, contact, schedule, buy, purchase',
-    category: 'lead-collection',
-    description: 'Keywords that can trigger lead capture.',
+    description: 'Required contact fields visitors must complete before chat starts.',
   },
   {
     key: 'lead_notifications_enabled',
@@ -143,12 +113,6 @@ export const CLINIC_SETTING_DEFAULTS = [
     value: '',
     category: 'lead-collection',
     description: 'Comma-separated email list for lead alerts.',
-  },
-  {
-    key: 'lead_auto_escalation',
-    value: 'false',
-    category: 'lead-collection',
-    description: 'Escalate leads automatically when the trigger conditions are met.',
   },
 ] as const
 
@@ -177,58 +141,6 @@ export interface ClinicSettingRow {
   created_at: string
   updated_at: string
 }
-
-export interface LeadCustomFieldRow {
-  id: string
-  clinic_id: string
-  label: string
-  field_type: 'text' | 'textarea' | 'select' | 'number' | 'email' | 'tel'
-  required: boolean
-  options: string[]
-  placeholder: string | null
-  sort_order: number
-  created_at: string
-  updated_at: string
-}
-
-export interface LeadCustomFieldResponse {
-  id: string
-  clinicId: string
-  label: string
-  fieldType: LeadCustomFieldRow['field_type']
-  required: boolean
-  options: string[]
-  placeholder: string | null
-  order: number
-  createdAt: string
-  updatedAt: string
-}
-
-export const leadCustomFieldSchema = z.object({
-  label: z.string().trim().min(2, 'Label is required.').max(120, 'Label must be 120 characters or fewer.'),
-  fieldType: z.enum(['text', 'textarea', 'select', 'number', 'email', 'tel']).default('text'),
-  required: z.boolean().optional().default(false),
-  options: z.array(z.string().trim().min(1).max(120)).max(25).optional().default([]),
-  placeholder: z
-    .string()
-    .trim()
-    .max(160, 'Placeholder must be 160 characters or fewer.')
-    .optional()
-    .nullable()
-    .transform((value) => {
-      if (value === undefined || value === null || value.length === 0) {
-        return null
-      }
-
-      return value
-    }),
-  order: z.number().int().positive().optional(),
-})
-
-export const leadCustomFieldUpdateSchema = leadCustomFieldSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  'At least one custom-field property is required.',
-)
 
 export function isKnownClinicSettingKey(key: string): key is ClinicSettingKey {
   return settingDefaultsByKey.has(key as ClinicSettingKey)
@@ -292,8 +204,6 @@ export async function ensureClinicSettings(
 }
 
 export async function listClinicSettings(supabase: SupabaseRouteClient, clinicId: string) {
-  await ensureClinicSettings(supabase, clinicId)
-
   const { data, error } = await supabase
     .from('clinic_settings')
     .select('id,clinic_id,key,value,category,description,created_at,updated_at')
@@ -305,7 +215,25 @@ export async function listClinicSettings(supabase: SupabaseRouteClient, clinicId
     throw error
   }
 
-  return (data ?? []) as ClinicSettingRow[]
+  const rows = (data ?? []) as ClinicSettingRow[]
+
+  // Backfill any missing defaults for clinics created before the seed trigger existed.
+  // Only runs when the DB returns fewer rows than expected, avoiding a wasteful
+  // upsert on every GET request.
+  if (rows.length < CLINIC_SETTING_DEFAULTS.length) {
+    await ensureClinicSettings(supabase, clinicId)
+    const refetched = await supabase
+      .from('clinic_settings')
+      .select('id,clinic_id,key,value,category,description,created_at,updated_at')
+      .eq('clinic_id', clinicId)
+      .order('category', { ascending: true })
+      .order('key', { ascending: true })
+    if (!refetched.error && refetched.data) {
+      return refetched.data as ClinicSettingRow[]
+    }
+  }
+
+  return rows
 }
 
 export async function updateClinicSetting(
@@ -339,11 +267,15 @@ export async function updateClinicSetting(
 }
 
 export function mapLeadSettings(rows: ClinicSettingRow[]) {
-  const settings: Record<string, string> = {}
+  const settings: Record<string, string> = {
+    required_fields: serializeLeadRequiredFields(DEFAULT_LEAD_REQUIRED_FIELDS),
+  }
 
   for (const row of rows) {
     if (!row.key.startsWith('lead_')) continue
-    settings[row.key.slice(5)] = row.value
+    const shortKey = row.key.slice(5)
+    if (!leadSettingKeysByShortName.has(shortKey)) continue
+    settings[shortKey] = row.value
   }
 
   return settings
@@ -357,38 +289,6 @@ export function normalizeLeadSettingsInput(input: Record<string, unknown>) {
     if (!fullKey) continue
     normalized[fullKey] = serializeClinicSettingValue(value)
   }
-
-  return normalized
-}
-
-export function mapLeadCustomField(row: LeadCustomFieldRow): LeadCustomFieldResponse {
-  return {
-    id: row.id,
-    clinicId: row.clinic_id,
-    label: row.label,
-    fieldType: row.field_type,
-    required: row.required,
-    options: row.options,
-    placeholder: row.placeholder,
-    order: row.sort_order,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }
-}
-
-export function normalizeLeadCustomFieldInput(
-  input: z.infer<typeof leadCustomFieldSchema> | z.infer<typeof leadCustomFieldUpdateSchema>,
-) {
-  const normalized: Record<string, unknown> = {}
-
-  if (input.label !== undefined) normalized.label = input.label
-  if (input.fieldType !== undefined) normalized.field_type = input.fieldType
-  if (input.required !== undefined) normalized.required = input.required
-  if (input.options !== undefined) {
-    normalized.options = [...new Set(input.options.map((option) => option.trim()).filter(Boolean))]
-  }
-  if (input.placeholder !== undefined) normalized.placeholder = input.placeholder
-  if (input.order !== undefined) normalized.sort_order = input.order
 
   return normalized
 }

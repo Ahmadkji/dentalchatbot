@@ -1,15 +1,4 @@
 /* eslint-disable no-undef */
-declare const Deno: {
-  serve(handler: (request: Request) => Response | Promise<Response>): void
-}
-declare namespace Supabase {
-  namespace ai {
-    class Session {
-      constructor(model: string)
-      run(input: string, options?: { mean_pool?: boolean; normalize?: boolean }): Promise<number[]>
-    }
-  }
-}
 
 const session = new Supabase.ai.Session('gte-small')
 
@@ -41,6 +30,7 @@ Deno.serve(async (request) => {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to generate embeddings'
+    console.error('[embed] Embedding generation failed', { error: message })
     return Response.json({ error: message }, { status: 500 })
   }
 })

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { assertSameOrigin } from '@/lib/security'
+import { consumeDistributedRateLimit } from '@/lib/rate-limit'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
 
@@ -50,19 +51,19 @@ function buildResponse(body: unknown, status = 200) {
 }
 
 async function requireSession(request: Request) {
-  const cookieResponse = NextResponse.next()
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (!supabase) {
-    return { cookieResponse, supabase: null, error: buildResponse({ error: 'Auth configuration missing.' }, 500) }
+    return { cookieResponse, supabase: null as null, user: null as null, error: buildResponse({ error: 'Auth configuration missing.' }, 500) }
   }
 
   const { data: { user }, error } = await supabase.auth.getUser()
   if (error || !user) {
-    return { cookieResponse, supabase, error: buildResponse({ error: 'Session expired.' }, 401) }
+    return { cookieResponse, supabase, user: null as null, error: buildResponse({ error: 'Session expired.' }, 401) }
   }
 
-  return { cookieResponse, supabase, error: null }
+  return { cookieResponse, supabase, user, error: null }
 }
 
 export async function POST(request: Request) {
@@ -70,7 +71,12 @@ export async function POST(request: Request) {
 
   try {
     assertSameOrigin(request.headers.get('origin'), url)
-  } catch {
+  } catch (originError) {
+    console.error('[auth:onboarding] CSRF origin check failed', {
+      origin: request.headers.get('origin'),
+      host: url.host,
+      error: originError instanceof Error ? originError.message : String(originError),
+    })
     return buildResponse({ error: 'Forbidden' }, 403)
   }
 
@@ -82,14 +88,32 @@ export async function POST(request: Request) {
     return buildResponse({ error: firstIssue?.message ?? 'Request body is required.' }, 400)
   }
 
-  const { cookieResponse, supabase, error } = await requireSession(request)
-  if (error || !supabase) {
+  const { cookieResponse, supabase, user, error } = await requireSession(request)
+  if (error || !supabase || !user) {
     return error ?? buildResponse({ error: 'Auth configuration missing.' }, 500)
   }
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return buildResponse({ error: 'Session expired.' }, 401)
+  const onboardingRateLimit = await consumeDistributedRateLimit(
+    `onboarding:${user.id}`,
+    3,
+    15 * 60 * 1000,
+    1,
+    false,
+  )
+
+  if (!onboardingRateLimit.allowed) {
+    const response = buildResponse(
+      {
+        error: 'Too many requests. Please try again later.',
+        resetAt: onboardingRateLimit.resetAt,
+      },
+      429,
+    )
+    response.headers.set(
+      'Retry-After',
+      String(Math.max(1, Math.ceil((onboardingRateLimit.resetAt - Date.now()) / 1000))),
+    )
+    return response
   }
 
   const websiteUrl = parsed.data.websiteUrl
@@ -108,6 +132,11 @@ export async function POST(request: Request) {
   })
 
   if (rpcError) {
+    console.error('[auth:onboarding] Onboarding RPC failed', {
+      error: rpcError.message,
+      code: rpcError.code ?? null,
+      details: rpcError.details ?? null,
+    })
     return buildResponse({ error: rpcError.message || 'Failed to create clinic workspace. Please try again.' }, 400)
   }
 

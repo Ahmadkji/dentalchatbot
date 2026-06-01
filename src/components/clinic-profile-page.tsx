@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/dialog'
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -23,7 +22,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -36,7 +34,6 @@ import {
   Pencil,
   Globe,
   Loader2,
-  Sparkles,
   CheckCircle2,
   MapPin,
   Phone,
@@ -44,7 +41,6 @@ import {
   CreditCard,
   AlertCircle,
   ExternalLink,
-  ArrowRight,
   Building2,
   MessageSquare,
   CalendarCheck,
@@ -55,6 +51,8 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useClinicContext } from '@/lib/contexts/clinic-context'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 
 interface ClinicProfile {
   id: string
@@ -228,18 +226,19 @@ export default function ClinicProfilePage() {
   const [fetching, setFetching] = useState(false)
   const [detectedDetails, setDetectedDetails] = useState<DetectedDetail[]>([])
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
-  const [selectedDetails, setSelectedDetails] = useState<Set<string>>(new Set())
-  const [applying, setApplying] = useState(false)
-  const [activeImportSessionId, setActiveImportSessionId] = useState('')
   const [fetchedUrl, setFetchedUrl] = useState('')
   const [contentPreview, setContentPreview] = useState('')
-  const [editedDetails, setEditedDetails] = useState<Record<string, string>>({})
 
   // Track which fields were auto-populated
   const [autoPopulatedFields, setAutoPopulatedFields] = useState<Set<string>>(new Set())
 
   // Track which fields are disabled (toggled off) by user
   const [disabledFields, setDisabledFields] = useState<Set<string>>(new Set())
+
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
 
   // Fields that can be toggled (exclude system/internal fields)
   const toggleableFields = useMemo(
@@ -251,50 +250,64 @@ export default function ClinicProfilePage() {
     []
   )
 
-  useEffect(() => {
-    async function fetchProfile() {
-      setLoading(true)
-      try {
-        const [clinicRes, settingsRes] = await Promise.all([
-          fetch('/api/clinic'),
-          fetch('/api/settings'),
-        ])
+  const fetchProfile = useCallback(async () => {
+    if (!hasLoadedRef.current) setLoading(true)
+    try {
+      const [clinicRes, settingsRes] = await Promise.all([
+        fetch('/api/clinic'),
+        fetch('/api/settings'),
+      ])
 
-        if (!clinicRes.ok) throw new Error('Failed to fetch clinic')
-        const data = await clinicRes.json()
-        setProfile(data)
+      if (!clinicRes.ok) throw new Error('Failed to fetch clinic')
+      const data = await clinicRes.json()
+      setProfile(data)
 
-        // Load disabled fields from settings
-        if (settingsRes.ok) {
-          const settingsData = await settingsRes.json()
-          const settingsList = settingsData.settings || []
-          const disabledSetting = settingsList.find(
-            (s: { key: string; value: string }) => s.key === 'bot_disabled_fields'
-          )
-          if (disabledSetting?.value) {
-            try {
-              const parsed = JSON.parse(disabledSetting.value)
-              if (Array.isArray(parsed)) {
-                setDisabledFields(new Set(parsed))
-              }
-            } catch {
-              // ignore parse errors
+      // Load disabled fields from settings
+      if (settingsRes.ok) {
+        const settingsData = await settingsRes.json()
+        const settingsList = settingsData.settings || []
+        const disabledSetting = settingsList.find(
+          (s: { key: string; value: string }) => s.key === 'bot_disabled_fields'
+        )
+        if (disabledSetting?.value) {
+          try {
+            const parsed = JSON.parse(disabledSetting.value)
+            if (Array.isArray(parsed)) {
+              setDisabledFields(new Set(parsed))
             }
+          } catch {
+            // ignore parse errors
           }
         }
-      } catch {
-        toast.error('Failed to load clinic profile')
-      } finally {
-        setLoading(false)
       }
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[ClinicProfilePage] Failed to fetch profile', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      toast.error('Failed to load clinic profile')
+    } finally {
+      setLoading(false)
     }
-
-    fetchProfile()
   }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchProfile()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchProfile])
+
+  // Re-fetch profile when user switches back to this tab.
+  // Disabled while any dialog or inline editor is open.
+  const anyEditing = editOpen || inlineEditKey !== null || fetchDialogOpen || previewDialogOpen
+  useRefetchOnFocus(fetchProfile, !anyEditing)
+
+  const { refreshClinic } = useClinicContext()
 
   const saveDisabledFields = useCallback(async (updatedDisabled: Set<string>) => {
     try {
-      await fetch('/api/settings', {
+      const res = await fetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -302,23 +315,44 @@ export default function ClinicProfilePage() {
           value: JSON.stringify([...updatedDisabled]),
         }),
       })
-    } catch {
-      // silent fail for toggle persistence
+      if (!res.ok) {
+        console.error('[saveDisabledFields] API returned non-OK', {
+          status: res.status,
+          statusText: res.statusText,
+        })
+        throw new Error(`API ${res.status}`)
+      }
+    } catch (error) {
+      console.error('[saveDisabledFields] Network or parsing error', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error // re-throw so the caller can roll back
     }
   }, [])
 
   const toggleField = useCallback((fieldKey: string) => {
-    setDisabledFields((prev) => {
-      const next = new Set(prev)
-      if (next.has(fieldKey)) {
-        next.delete(fieldKey)
-      } else {
-        next.add(fieldKey)
-      }
-      void saveDisabledFields(next)
-      return next
+    const next = new Set(disabledFields)
+    const wasEnabled = next.has(fieldKey) // track what we toggled FROM
+    if (wasEnabled) {
+      next.delete(fieldKey)
+    } else {
+      next.add(fieldKey)
+    }
+    setDisabledFields(next) // optimistic update
+    saveDisabledFields(next).catch(() => {
+      // Roll back ONLY this specific field to avoid wiping concurrent toggles
+      setDisabledFields((current) => {
+        const rolled = new Set(current)
+        if (wasEnabled) {
+          rolled.add(fieldKey)    // was enabled → we disabled it → undo: re-enable
+        } else {
+          rolled.delete(fieldKey) // was disabled → we enabled it → undo: re-disable
+        }
+        return rolled
+      })
+      toast.error('Failed to save field toggle — please try again.')
     })
-  }, [saveDisabledFields])
+  }, [disabledFields, saveDisabledFields])
 
   // Computed: fill progress
   const fillProgress = useMemo(() => {
@@ -398,7 +432,15 @@ export default function ClinicProfilePage() {
         return next
       })
       toast.success('Updated')
-    } catch {
+      // Sync the sidebar / global clinic state (non-blocking — failure is logged but does not affect page state)
+      refreshClinic().catch((err) =>
+        console.error('[saveInlineEdit] refreshClinic failed', { error: err instanceof Error ? err.message : String(err) }),
+      )
+    } catch (error) {
+      console.error('[ClinicProfilePage] Inline edit save failed', {
+        field: inlineEditKey,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update')
     } finally {
       setInlineSaving(false)
@@ -447,7 +489,15 @@ export default function ClinicProfilePage() {
         return next
       })
       toast.success('Clinic profile updated')
-    } catch {
+      // Sync the sidebar / global clinic state (non-blocking — failure is logged but does not affect page state)
+      refreshClinic().catch((err) =>
+        console.error('[handleSave] refreshClinic failed', { error: err instanceof Error ? err.message : String(err) }),
+      )
+    } catch (error) {
+      console.error('[ClinicProfilePage] Dialog save failed', {
+        field: editingField,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update clinic profile')
     } finally {
       setSubmitting(false)
@@ -481,10 +531,10 @@ export default function ClinicProfilePage() {
 
     setFetching(true)
     try {
-      const res = await fetch('/api/clinic-imports', {
+      const res = await fetch('/api/clinic/fetch-from-website', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ website_url: fetchUrl.trim() }),
+        body: JSON.stringify({ url: fetchUrl.trim() }),
       })
 
       if (!res.ok) {
@@ -493,101 +543,36 @@ export default function ClinicProfilePage() {
       }
 
       const data = await res.json()
-      const session = data.session ?? null
+      const session = data?.session ?? null
+      const clinic = data?.clinic ?? null
 
-      if (!session || !Array.isArray(session.detectedFields) || session.detectedFields.length === 0) {
-        toast.info('No clinic details could be detected from this website. Try entering your clinic URL or contact page.')
-        setFetching(false)
-        return
+      if (clinic) {
+        setProfile(clinic)
       }
 
-      setDetectedDetails(session.detectedFields)
-      setActiveImportSessionId(session.id)
-      setEditedDetails(
-        Object.fromEntries(
-          session.detectedFields.map((detail: DetectedDetail) => [detail.id, detail.value]),
-        ),
+      // Sync the sidebar / global clinic state (non-blocking — failure is logged but does not affect page state)
+      refreshClinic().catch((err) =>
+        console.error('[handleFetchFromWebsite] refreshClinic failed', { error: err instanceof Error ? err.message : String(err) }),
       )
-      setFetchedUrl(session.websiteUrl)
-      setContentPreview(data.contentPreview || '')
-      setSelectedDetails(
-        new Set(
-          session.detectedFields
-            .filter((detail: DetectedDetail) => detail.canApply)
-            .map((detail: DetectedDetail) => detail.id),
-        ),
-      )
+
+      setDetectedDetails(Array.isArray(session?.detectedFields) ? session.detectedFields : [])
+      setFetchedUrl(String(session?.websiteUrl ?? fetchUrl.trim()))
+      setContentPreview(String(data?.contentPreview ?? ''))
       setFetchDialogOpen(false)
       setPreviewDialogOpen(true)
+      setFetchUrl('')
+
+      if (Array.isArray(data?.warnings) && data.warnings.length > 0) {
+        toast.info('The import used some safe fallbacks. Review the preview for details.')
+      }
+
+      toast.success('Website details imported and applied automatically')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to fetch website content')
     } finally {
       setFetching(false)
     }
-  }, [fetchUrl])
-
-  const toggleDetailSelection = (fieldId: string) => {
-    setSelectedDetails((prev) => {
-      const next = new Set(prev)
-      if (next.has(fieldId)) {
-        next.delete(fieldId)
-      } else {
-        next.add(fieldId)
-      }
-      return next
-    })
-  }
-
-  const applySelectedDetails = useCallback(async () => {
-    if (selectedDetails.size === 0) {
-      toast.error('Please select at least one field to apply')
-      return
-    }
-    if (!activeImportSessionId) {
-      toast.error('Import session missing. Please fetch the website again.')
-      return
-    }
-
-    setApplying(true)
-    try {
-      const res = await fetch(`/api/clinic-imports/${activeImportSessionId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          approved_fields: detectedDetails.map((detail) => ({
-            fieldId: detail.id,
-            approved: detail.canApply && selectedDetails.has(detail.id),
-            approvedValue: editedDetails[detail.id] ?? detail.value,
-          })),
-        }),
-      })
-
-      if (!res.ok) throw new Error('Failed to apply details')
-
-      const updated = await res.json()
-      const newAutoPopulated = new Set<string>(
-        detectedDetails
-          .filter((detail) => detail.canApply && selectedDetails.has(detail.id))
-          .map((detail) => detail.targetField),
-      )
-
-      setProfile(updated.clinic)
-      setAutoPopulatedFields((prev) => new Set([...prev, ...newAutoPopulated]))
-      setPreviewDialogOpen(false)
-      setDetectedDetails([])
-      setEditedDetails({})
-      setActiveImportSessionId('')
-      setFetchUrl('')
-      if (Array.isArray(updated.warnings) && updated.warnings.length > 0) {
-        toast.info('Some detected fields still need structured manual review before they can be applied.')
-      }
-      toast.success(`Applied ${selectedDetails.size} field${selectedDetails.size > 1 ? 's' : ''} from website`)
-    } catch {
-      toast.error('Failed to apply detected details')
-    } finally {
-      setApplying(false)
-    }
-  }, [activeImportSessionId, detectedDetails, editedDetails, selectedDetails])
+  }, [fetchUrl, refreshClinic])
 
   const renderValue = (field: keyof ClinicProfile) => {
     if (field === 'isActive') {
@@ -649,7 +634,7 @@ export default function ClinicProfilePage() {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="max-w-[260px]">
-              <p className="text-xs">Auto-detect clinic name, address, phone, hours &amp; more from your website. All fields can be reviewed before applying.</p>
+              <p className="text-xs">Auto-detect clinic name, address, phone, hours &amp; more from your website. The server applies the safe fields automatically and shows you a read-only preview.</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -954,18 +939,15 @@ export default function ClinicProfilePage() {
       <AlertDialog open={previewDialogOpen} onOpenChange={setPreviewDialogOpen}>
         <AlertDialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle>Detected From Your Website</AlertDialogTitle>
+            <AlertDialogTitle>Website Import Applied Automatically</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
                 <span>
-                  We found the following details from <a href={fetchedUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline inline-flex items-center gap-1">{fetchedUrl} <ExternalLink className="size-3" /></a>. Select which fields to apply to your Bot Setup.
+                  We found and saved these details from <a href={fetchedUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline inline-flex items-center gap-1">{fetchedUrl} <ExternalLink className="size-3" /></a>. The screen below is only for review.
                 </span>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="outline" className="text-[10px]">
                     {detectedDetails.length} field{detectedDetails.length !== 1 ? 's' : ''} detected
-                  </Badge>
-                  <Badge variant="outline" className="text-[10px]">
-                    {selectedDetails.size} selected
                   </Badge>
                 </div>
               </div>
@@ -973,35 +955,13 @@ export default function ClinicProfilePage() {
           </AlertDialogHeader>
 
           <div className="space-y-3 py-2">
-            {/* Select All / Deselect All */}
-            <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2">
-              <span className="text-xs font-medium text-muted-foreground">Toggle selection</span>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setSelectedDetails(new Set(detectedDetails.filter((d) => d.canApply).map((d) => d.id)))}
-                >
-                  Select All
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setSelectedDetails(new Set())}
-                >
-                  Deselect All
-                </Button>
-              </div>
+            <div className="rounded-md border bg-emerald-50/40 px-3 py-2 text-xs text-emerald-800">
+              The clinic profile was updated on the server. Review the extracted values below and make manual edits only if you want to change them later.
             </div>
 
             {detectedDetails.map((detail) => {
               const Icon = detailIcons[detail.field] || CheckCircle2
-              const isSelected = selectedDetails.has(detail.id)
               const currentProfileValue = String(profile[detail.targetField as keyof ClinicProfile] ?? '').trim()
-              const editedValue = editedDetails[detail.id] ?? detail.value
-              const useTextarea = editedValue.length > 80 || ['address', 'pricingNotes', 'emergencyInstructions', 'openingHours'].includes(detail.targetField)
 
               return (
                 <div
@@ -1009,18 +969,9 @@ export default function ClinicProfilePage() {
                   className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
                     !detail.canApply
                       ? 'border-amber-200 bg-amber-50/30'
-                      : isSelected
-                        ? 'border-emerald-200 bg-emerald-50/30 cursor-pointer'
-                        : 'border-muted bg-muted/10 opacity-60 cursor-pointer'
+                      : 'border-emerald-200 bg-emerald-50/20'
                   }`}
-                  onClick={() => detail.canApply && toggleDetailSelection(detail.id)}
                 >
-                  <Checkbox
-                    checked={isSelected}
-                    disabled={!detail.canApply}
-                    onCheckedChange={() => detail.canApply && toggleDetailSelection(detail.id)}
-                    className="mt-0.5"
-                  />
                   <Icon className="size-4 text-emerald-600 mt-0.5 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -1040,29 +991,6 @@ export default function ClinicProfilePage() {
                     )}
                     {!detail.canApply && detail.reason && (
                       <p className="text-[11px] text-amber-700 mt-1">{detail.reason}</p>
-                    )}
-                    {detail.canApply && isSelected && (
-                      <div className="mt-2" onClick={(event) => event.stopPropagation()}>
-                        <Label className="text-[11px] text-muted-foreground">Approved value</Label>
-                        {useTextarea ? (
-                          <Textarea
-                            rows={3}
-                            value={editedValue}
-                            onChange={(event) =>
-                              setEditedDetails((prev) => ({ ...prev, [detail.id]: event.target.value }))
-                            }
-                            className="mt-1 text-sm"
-                          />
-                        ) : (
-                          <Input
-                            value={editedValue}
-                            onChange={(event) =>
-                              setEditedDetails((prev) => ({ ...prev, [detail.id]: event.target.value }))
-                            }
-                            className="mt-1 h-8 text-sm"
-                          />
-                        )}
-                      </div>
                     )}
                   </div>
                 </div>
@@ -1098,28 +1026,12 @@ export default function ClinicProfilePage() {
             <AlertDialogCancel onClick={() => {
               setPreviewDialogOpen(false)
               setDetectedDetails([])
-              setEditedDetails({})
-              setActiveImportSessionId('')
+              setFetchedUrl('')
+              setContentPreview('')
+              setFetchUrl('')
             }}>
-              Cancel
+              Close
             </AlertDialogCancel>
-            <Button
-              className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
-              onClick={() => void applySelectedDetails()}
-              disabled={applying || selectedDetails.size === 0}
-            >
-              {applying ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Applying...
-                </>
-              ) : (
-                <>
-                  Apply {selectedDetails.size} Field{selectedDetails.size !== 1 ? 's' : ''}
-                  <ArrowRight className="size-4" />
-                </>
-              )}
-            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

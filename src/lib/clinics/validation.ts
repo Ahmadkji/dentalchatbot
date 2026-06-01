@@ -1,10 +1,14 @@
 import 'server-only'
 
-import { parsePhoneNumberFromString } from 'libphonenumber-js'
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
 import { z } from 'zod'
 
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const httpsUrlPattern = /^https:\/\/[^/\s?#]+(?:[^\s]*)?$/i
+const currencyPattern = /^[A-Z]{3}$/
+
+export const servicePriceTypes = ['fixed', 'starting_from', 'range', 'free', 'quote_required'] as const
+export type ServicePriceType = (typeof servicePriceTypes)[number]
 
 /** Allowed domain must be an exact HTTPS origin (e.g. https://example.com). */
 const allowedDomainPattern = /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}(:\d+)?$/i
@@ -102,14 +106,66 @@ export function normalizePhoneNumber(value: string) {
   return phone.number
 }
 
+function normalizeCountryCode(value: string | null | undefined): CountryCode | null {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!/^[a-z]{2}$/i.test(trimmed)) {
+    return null
+  }
+
+  return trimmed.toUpperCase() as CountryCode
+}
+
+export function normalizePhoneNumberIfPossible(
+  value: string | null | undefined,
+  options?: { defaultCountry?: string | null },
+) {
+  if (!value || !value.trim()) return null
+
+  const trimmed = value.trim()
+  const normalizedInput = trimmed.startsWith('00') ? `+${trimmed.slice(2)}` : trimmed
+  const candidates = [
+    normalizeCountryCode(options?.defaultCountry),
+    null,
+  ]
+
+  for (const country of candidates) {
+    const phone = country
+      ? parsePhoneNumberFromString(normalizedInput, country)
+      : parsePhoneNumberFromString(normalizedInput)
+
+    if (phone?.isValid()) {
+      return phone.number
+    }
+  }
+
+  return null
+}
+
 export function normalizeOptionalPhoneNumber(value: string | null | undefined) {
   if (!value || !value.trim()) return null
   return normalizePhoneNumber(value)
 }
 
+export function normalizeOptionalPhoneNumberIfPossible(
+  value: string | null | undefined,
+  options?: { defaultCountry?: string | null },
+) {
+  return normalizePhoneNumberIfPossible(value, options)
+}
+
 export function normalizeOptionalHttpsUrl(value: string | null | undefined) {
   if (!value || !value.trim()) return null
   return ensureHttpsUrl(value)
+}
+
+export function normalizeOptionalHttpsUrlIfPossible(value: string | null | undefined) {
+  if (!value || !value.trim()) return null
+
+  try {
+    return ensureHttpsUrl(value)
+  } catch {
+    return null
+  }
 }
 
 export const clinicProfileUpdateSchema = z.object({
@@ -126,6 +182,7 @@ export const clinicProfileUpdateSchema = z.object({
   pricing_notes: z.string().trim().max(1200).optional().nullable(),
   appointment_rules: z.string().trim().max(1200).optional().nullable(),
   emergency_instructions: z.string().trim().max(1200).optional().nullable(),
+  default_currency: z.string().trim().toUpperCase().regex(currencyPattern, 'Currency must be a 3-letter ISO code.').optional(),
 })
 
 export type ClinicProfileUpdateInput = z.infer<typeof clinicProfileUpdateSchema>
@@ -146,6 +203,7 @@ export function normalizeClinicProfileUpdate(input: ClinicProfileUpdateInput) {
   if (input.pricing_notes !== undefined) output.pricing_notes = input.pricing_notes ? normalizeWhitespace(input.pricing_notes) : null
   if (input.appointment_rules !== undefined) output.appointment_rules = input.appointment_rules ? normalizeWhitespace(input.appointment_rules) : null
   if (input.emergency_instructions !== undefined) output.emergency_instructions = input.emergency_instructions ? normalizeWhitespace(input.emergency_instructions) : null
+  if (input.default_currency !== undefined) output.default_currency = input.default_currency.trim().toUpperCase()
 
   return output
 }
@@ -157,17 +215,58 @@ const numericField = z.preprocess((value) => {
   return value
 }, z.number().finite())
 
-export const serviceCreateSchema = z.object({
+const serviceSchemaBase = z.object({
   name: z.string().trim().min(2, 'Service name is required.').max(120),
   description: z.string().trim().max(2000).optional().nullable(),
   category: z.string().trim().max(80).optional().nullable(),
+  price_type: z.enum(servicePriceTypes, { message: 'Select a valid pricing type.' }),
   price_amount: numericField.nullable().refine((value) => value === null || value >= 0, 'Price cannot be negative.').optional(),
-  price_currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter ISO code.').optional().nullable(),
+  price_min_amount: numericField.nullable().refine((value) => value === null || value >= 0, 'Minimum price cannot be negative.').optional(),
+  price_max_amount: numericField.nullable().refine((value) => value === null || value >= 0, 'Maximum price cannot be negative.').optional(),
+  price_currency: z.string().trim().toUpperCase().regex(currencyPattern, 'Currency must be a 3-letter ISO code.').optional().nullable(),
   pricing_note: z.string().trim().max(400).optional().nullable(),
   duration_minutes: numericField.refine((value) => value > 0, 'Duration must be greater than 0.'),
   is_active: z.boolean().optional(),
   sort_order: numericField.refine((value) => value > 0, 'Sort order must be greater than 0.').optional(),
+  is_price_visible_to_chatbot: z.boolean().optional(),
+  requires_consultation: z.boolean().optional(),
 })
+
+export const serviceCreateSchema = serviceSchemaBase.superRefine((input, ctx) => {
+  if (input.price_type === 'fixed' && input.price_amount == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'A fixed price requires one amount.',
+      path: ['price_amount'],
+    })
+  }
+
+  if (input.price_type === 'starting_from' && input.price_amount == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'A starting-from price requires one amount.',
+      path: ['price_amount'],
+    })
+  }
+
+  if (input.price_type === 'range') {
+    if (input.price_min_amount == null || input.price_max_amount == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A range price requires both a minimum and maximum amount.',
+        path: ['price_min_amount'],
+      })
+    } else if (input.price_max_amount < input.price_min_amount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Maximum price must be greater than or equal to the minimum price.',
+        path: ['price_max_amount'],
+      })
+    }
+  }
+})
+
+export const serviceUpdateSchema = serviceSchemaBase.partial()
 
 export type ServiceCreateInput = z.infer<typeof serviceCreateSchema>
 
@@ -176,11 +275,16 @@ export function normalizeServiceInput(input: ServiceCreateInput) {
     name: normalizeWhitespace(input.name),
     description: input.description ? normalizeWhitespace(input.description) : null,
     category: input.category ? normalizeWhitespace(input.category) : null,
+    price_type: input.price_type,
     price_amount: input.price_amount ?? null,
+    price_min_amount: input.price_min_amount ?? null,
+    price_max_amount: input.price_max_amount ?? null,
     price_currency: input.price_currency?.trim().toUpperCase() ?? null,
     pricing_note: input.pricing_note ? normalizeWhitespace(input.pricing_note) : null,
     duration_minutes: Number(input.duration_minutes),
     is_active: input.is_active ?? true,
     sort_order: input.sort_order ? Number(input.sort_order) : 100,
+    is_price_visible_to_chatbot: input.is_price_visible_to_chatbot ?? false,
+    requires_consultation: input.requires_consultation ?? false,
   }
 }

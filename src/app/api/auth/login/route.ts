@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { assertSameOrigin, getClientIp, registerSession } from '@/lib/security'
 import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
@@ -15,7 +16,12 @@ export async function POST(request: Request) {
 
   try {
     assertSameOrigin(request.headers.get('origin'), url)
-  } catch {
+  } catch (originError) {
+    console.error('[auth:login] CSRF origin check failed', {
+      origin: request.headers.get('origin'),
+      host: url.host,
+      error: originError instanceof Error ? originError.message : String(originError),
+    })
     return buildResponse({ error: 'Forbidden' }, 403)
   }
 
@@ -68,7 +74,7 @@ export async function POST(request: Request) {
     return response
   }
 
-  const cookieResponse = NextResponse.next()
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
   if (!supabase) {
     return buildResponse({ error: 'Auth configuration missing.' }, 500)
@@ -84,6 +90,10 @@ export async function POST(request: Request) {
     })
 
     if (error) {
+      console.error('[auth:login] Supabase signUp failed', {
+        error: error.message,
+        code: error.status ?? null,
+      })
       const mapped = mapSignupError(error)
       return buildResponse({ error: mapped.message }, mapped.status)
     }
@@ -110,13 +120,17 @@ export async function POST(request: Request) {
   })
 
   if (error || !data.session) {
+    console.error('[auth:login] Supabase signIn failed', {
+      error: error?.message ?? 'No session returned',
+      code: error?.status ?? null,
+    })
     return buildResponse({ error: 'Invalid credentials' }, 401)
   }
 
   // Register session for device tracking (Items 24, 26)
-  registerSession(
+  await registerSession(
     data.session.user.id,
-    data.session.access_token.substring(0, 16),
+    randomUUID(),
     getClientIp(request.headers),
     request.headers.get('user-agent') || 'unknown'
   )

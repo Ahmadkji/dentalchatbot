@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { enforceRateLimit } from '@/lib/rate-limit-guard'
 import { getClientIp } from '@/lib/security'
+
+const statusFilterSchema = z.enum(['active', 'pending', 'closed'])
+
+function sanitizeSearchTerm(raw: string) {
+  return raw
+    .replace(/[,:().]/g, ' ')
+    .replace(/[%_*]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+}
 
 export async function GET(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -17,8 +29,6 @@ export async function GET(request: NextRequest) {
     }
 
     const searchParams = request.nextUrl.searchParams
-    const status = searchParams.get('status')
-    const search = searchParams.get('search')
 
     let query = supabase
       .from('conversations')
@@ -26,12 +36,21 @@ export async function GET(request: NextRequest) {
       .eq('clinic_id', current.clinic.id)
       .order('updated_at', { ascending: false })
 
-    if (status) {
-      query = query.eq('status', status)
+    const rawStatus = searchParams.get('status')
+    if (rawStatus !== null) {
+      const parsedStatus = statusFilterSchema.safeParse(rawStatus)
+      if (!parsedStatus.success) {
+        return NextResponse.json({ error: 'Invalid status filter' }, { status: 400 })
+      }
+      query = query.eq('status', parsedStatus.data)
     }
 
-    if (search) {
-      query = query.or(`subject.ilike.%${search}%,channel.ilike.%${search}%,visitor_id.ilike.%${search}%`)
+    const rawSearch = searchParams.get('search')
+    if (rawSearch) {
+      const safeSearch = sanitizeSearchTerm(rawSearch)
+      if (safeSearch) {
+        query = query.or(`subject.ilike.*${safeSearch}*,channel.ilike.*${safeSearch}*,visitor_id.ilike.*${safeSearch}*`)
+      }
     }
 
     const { data: conversations, error } = await query
@@ -90,7 +109,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(flattened)
   } catch (error) {
-    console.error('Error fetching conversations:', error)
+    console.error('[conversations:GET] Failed to fetch conversations', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch conversations' }, { status: 500 })
   }
 }
@@ -156,7 +178,10 @@ export async function POST(request: NextRequest) {
       updatedAt: conversation.updated_at,
     }, { status: 201 })
   } catch (error) {
-    console.error('Error creating conversation:', error)
+    console.error('[conversations:POST] Failed to create conversation', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to create conversation' }, { status: 500 })
   }
 }

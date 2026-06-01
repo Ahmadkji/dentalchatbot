@@ -204,7 +204,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(created, { status: 201 })
   } catch (error) {
-    console.error('Error logging analytics event:', error)
+    console.error('[analytics:POST] Failed to log analytics event', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to log analytics event' }, { status: 500 })
   }
 }

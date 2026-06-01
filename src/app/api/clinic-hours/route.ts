@@ -33,7 +33,10 @@ export async function GET() {
     const hours = await getClinicHours(supabase, clinic.id)
     return NextResponse.json(withDayNames(hours))
   } catch (error) {
-    console.error('Error fetching clinic hours:', error)
+    console.error('[clinic-hours:GET] Failed to fetch clinic hours', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch clinic hours' }, { status: 500 })
   }
 }
@@ -71,7 +74,10 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(withDayNames((data ?? []) as Awaited<ReturnType<typeof getClinicHours>>))
   } catch (error) {
-    console.error('Error replacing clinic hours:', error)
+    console.error('[clinic-hours:PUT] Failed to replace clinic hours', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update clinic hours' }, { status: 500 })
   }
 }

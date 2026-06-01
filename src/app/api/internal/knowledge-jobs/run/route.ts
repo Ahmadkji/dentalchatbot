@@ -56,7 +56,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result)
   } catch (error) {
-    console.error('Error processing queued knowledge jobs:', error)
+    console.error('[internal:knowledge-jobs] Failed to process queued knowledge jobs', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to process queued jobs' }, { status: 500 })
   }
 }

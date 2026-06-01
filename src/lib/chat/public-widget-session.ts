@@ -84,6 +84,8 @@ export async function validatePublicSessionToken(input: {
   clinic_id: string
   public_token_hash: string | null
   public_token_expires_at: string | null
+  source_page: string | null
+  lead_captured: boolean
 } | null> {
   // Early format validation: reject malformed input before hitting DB
   const parsed = widgetTokenInputSchema.safeParse(input)
@@ -94,7 +96,7 @@ export async function validatePublicSessionToken(input: {
 
   const { data: conv } = await adminClient
     .from('conversations')
-    .select('id, clinic_id, public_token_hash, public_token_expires_at')
+    .select('id, clinic_id, public_token_hash, public_token_expires_at, source_page, lead_captured')
     .eq('id', input.conversationId)
     .eq('public_token_hash', tokenHash)
     .eq('clinic_id', input.expectedClinicId)
@@ -119,10 +121,17 @@ export async function extendTokenExpiry(conversationId: string): Promise<void> {
   const adminClient = createSupabaseAdminClient()
   const newExpiry = new Date(Date.now() + TOKEN_EXPIRY_MS).toISOString()
 
-  await adminClient
+  const { error } = await adminClient
     .from('conversations')
     .update({ public_token_expires_at: newExpiry })
     .eq('id', conversationId)
+
+  if (error) {
+    console.error('[widget-session] Failed to extend token expiry', {
+      conversationId,
+      error: error.message,
+    })
+  }
 }
 
 /**
@@ -144,13 +153,15 @@ export async function validateCookieTokenFallback(input: {
   clinic_id: string
   public_token_hash: string | null
   public_token_expires_at: string | null
+  source_page: string | null
+  lead_captured: boolean
 } | null> {
   const adminClient = createSupabaseAdminClient()
   const tokenHash = hashSessionToken(input.rawToken)
 
   const { data: conv } = await adminClient
     .from('conversations')
-    .select('id, clinic_id, public_token_hash, public_token_expires_at')
+    .select('id, clinic_id, public_token_hash, public_token_expires_at, source_page, lead_captured')
     .eq('id', input.conversationId)
     .eq('clinic_id', input.expectedClinicId)
     .eq('public_token_hash', tokenHash)

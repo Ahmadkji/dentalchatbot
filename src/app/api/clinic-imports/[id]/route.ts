@@ -25,7 +25,10 @@ export async function GET(
 
     return NextResponse.json(session)
   } catch (error) {
-    console.error('Error fetching clinic import session:', error)
+    console.error('[clinic-imports:GET] Failed to fetch clinic import session', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to load import session' }, { status: 500 })
   }
 }
@@ -52,7 +55,10 @@ export async function DELETE(
     await cancelClinicImportSession(supabase, current.clinic.id, id)
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error cancelling clinic import session:', error)
+    console.error('[clinic-imports:DELETE] Failed to cancel clinic import session', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to cancel import session' }, { status: 500 })
   }
 }

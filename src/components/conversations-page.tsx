@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import {
   Table,
   TableBody,
@@ -52,6 +53,7 @@ interface Conversation {
   directionsClicks?: number
   callClicks?: number
   createdAt: string
+  updatedAt?: string
 }
 
 interface Message {
@@ -99,19 +101,29 @@ export default function ConversationsPage() {
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   const fetchConversations = useCallback(async () => {
-    setLoading(true)
+    // Only show skeleton rows on the very first load.
+    // Background re-fetches keep existing data visible —
+    // same pattern as SWR revalidateOnFocus / TanStack Query refetchOnWindowFocus.
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter !== 'all') params.set('status', statusFilter)
       if (search) params.set('search', search)
       const res = await fetch(`/api/conversations?${params.toString()}`)
-      if (res.ok) {
-        const data = await res.json()
-        setConversations(data.conversations || data || [])
-      }
+      if (!res.ok) throw new Error('Failed to load conversations')
+      const data = await res.json()
+      setConversations(data.conversations || data || [])
+      hasLoadedRef.current = true
     } catch (error) {
-      console.error('Failed to fetch conversations:', error)
+      console.error('[ConversationsPage] Failed to fetch conversations', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load conversations')
     } finally {
       setLoading(false)
@@ -126,18 +138,25 @@ export default function ConversationsPage() {
     return () => window.clearTimeout(timer)
   }, [fetchConversations])
 
+  // Re-fetch conversations when user switches back to this tab/page.
+  // Replicates SWR's revalidateOnFocus / TanStack Query's refetchOnWindowFocus.
+  // Disabled while the detail sheet is open to avoid disrupting the user.
+  useRefetchOnFocus(fetchConversations, !sheetOpen)
+
   const openConversation = async (conv: Conversation) => {
     setSelectedConv(conv)
     setSheetOpen(true)
     setMessagesLoading(true)
     try {
       const res = await fetch(`/api/conversations/${conv.id}`)
-      if (res.ok) {
-        const data = await res.json()
-        setMessages(data.messages || [])
-      }
+      if (!res.ok) throw new Error('Failed to load messages')
+      const data = await res.json()
+      setMessages(data.messages || [])
     } catch (error) {
-      console.error('Failed to fetch messages:', error)
+      console.error('[ConversationsPage] Failed to fetch messages', {
+        conversationId: conv.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load messages')
     } finally {
       setMessagesLoading(false)
@@ -151,16 +170,18 @@ export default function ConversationsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       })
-      if (res.ok) {
-        toast.success(`Conversation ${newStatus === 'closed' ? 'closed' : 'reopened'}`)
-        fetchConversations()
-        if (selectedConv?.id === convId) {
-          setSelectedConv({ ...selectedConv, status: newStatus })
-        }
-      } else {
-        toast.error('Failed to update status')
+      if (!res.ok) throw new Error('Failed to update status')
+      toast.success(`Conversation ${newStatus === 'closed' ? 'closed' : 'reopened'}`)
+      fetchConversations()
+      if (selectedConv?.id === convId) {
+        setSelectedConv({ ...selectedConv, status: newStatus })
       }
-    } catch {
+    } catch (error) {
+      console.error('[ConversationsPage] Failed to update status', {
+        conversationId: convId,
+        newStatus,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update status')
     }
   }
@@ -175,39 +196,24 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error('Failed to update')
       toast.success(successMessage)
 
-      if (payload.helpfulStatus === 'not_helpful' && selectedConv?.id === convId && selectedConv.lastMessage) {
-        await fetch('/api/unanswered-questions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            conversationId: convId,
-            question: selectedConv.lastMessage,
-            sourcePage: selectedConv.sourcePage || '/',
-          }),
-        })
-      }
-
       void fetchConversations()
       if (selectedConv?.id === convId) {
         setSelectedConv((prev) => (prev ? { ...prev, ...payload } : prev))
       }
-    } catch {
+    } catch (error) {
+      console.error('[ConversationsPage] Failed to update conversation meta', {
+        conversationId: convId,
+        payload,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update conversation')
     }
   }
 
-  const filteredConversations = conversations.filter((conv) => {
-    if (statusFilter !== 'all' && conv.status !== statusFilter) return false
-    if (search) {
-      const q = search.toLowerCase()
-      return (
-        conv.patientName?.toLowerCase().includes(q) ||
-        conv.subject?.toLowerCase().includes(q) ||
-        conv.channel?.toLowerCase().includes(q)
-      )
-    }
-    return true
-  })
+  // Server already filters by status & search — no client-side re-filter needed.
+  // The server search covers: subject, channel, visitor_id.
+  // The API returns a flat array (not wrapped in { conversations: [...] }).
+  const displayedConversations = conversations
 
   return (
     <div className="space-y-4">
@@ -238,7 +244,6 @@ export default function ConversationsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Visitor</TableHead>
-              <TableHead>Channel</TableHead>
               <TableHead className="hidden md:table-cell">Subject</TableHead>
               <TableHead className="text-center">Messages</TableHead>
               <TableHead className="hidden lg:table-cell">Last Message</TableHead>
@@ -252,24 +257,21 @@ export default function ConversationsPage() {
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 9 }).map((_, j) => (
+                  {Array.from({ length: 8 }).map((_, j) => (
                     <TableCell key={j}>
                       <Skeleton className="h-4 w-20" />
                     </TableCell>
                   ))}
                 </TableRow>
               ))
-            ) : filteredConversations.length > 0 ? (
-              filteredConversations.map((conv) => (
+            ) : displayedConversations.length > 0 ? (
+              displayedConversations.map((conv) => (
                 <TableRow
                   key={conv.id}
                   className="cursor-pointer"
                   onClick={() => openConversation(conv)}
                 >
                   <TableCell className="font-medium">{conv.patientName}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs uppercase">
-                    {conv.channel}
-                  </TableCell>
                   <TableCell className="hidden md:table-cell text-muted-foreground max-w-[180px] truncate">
                     {conv.subject || '—'}
                   </TableCell>
@@ -313,7 +315,7 @@ export default function ConversationsPage() {
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                   No conversations found
                 </TableCell>
               </TableRow>
@@ -331,10 +333,7 @@ export default function ConversationsPage() {
               {selectedConv?.patientName || 'Conversation'}
             </SheetTitle>
             <SheetDescription className="text-xs">
-              {selectedConv?.channel && (
-                <span className="uppercase">{selectedConv.channel}</span>
-              )}
-              {selectedConv?.subject && ` — ${selectedConv.subject}`}
+              {selectedConv?.subject || 'Conversation details'}
             </SheetDescription>
           </SheetHeader>
 

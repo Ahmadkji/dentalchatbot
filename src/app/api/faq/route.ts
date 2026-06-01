@@ -5,6 +5,11 @@ import { createFaqEntry, listFaqEntriesForClinic } from '@/lib/knowledge/faq'
 import { enforceRateLimit } from '@/lib/rate-limit-guard'
 import { getClientIp } from '@/lib/security'
 
+const QUESTION_MIN = 3
+const QUESTION_MAX = 300
+const ANSWER_MIN = 3
+const ANSWER_MAX = 5000
+
 export async function GET(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
@@ -23,7 +28,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(faqs)
   } catch (error) {
-    console.error('Error fetching FAQs:', error)
+    console.error('[faq:GET] Failed to fetch FAQs', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch FAQs' }, { status: 500 })
   }
 }
@@ -63,6 +71,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'question and answer are required' }, { status: 400 })
     }
 
+    if (question.length < QUESTION_MIN || question.length > QUESTION_MAX) {
+      return NextResponse.json(
+        { error: `question must be between ${QUESTION_MIN} and ${QUESTION_MAX} characters` },
+        { status: 400 },
+      )
+    }
+
+    if (answer.length < ANSWER_MIN || answer.length > ANSWER_MAX) {
+      return NextResponse.json(
+        { error: `answer must be between ${ANSWER_MIN} and ${ANSWER_MAX} characters` },
+        { status: 400 },
+      )
+    }
+
+    if (body?.order !== undefined && (!Number.isInteger(order) || order < 1)) {
+      return NextResponse.json({ error: 'order must be a positive integer' }, { status: 400 })
+    }
+
     const faq = await createFaqEntry(supabase, {
       clinicId: current.clinic.id,
       question,
@@ -75,7 +101,19 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(faq, { status: 201 })
   } catch (error) {
-    console.error('Error creating FAQ:', error)
+    console.error('[faq:POST] Failed to create FAQ', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
+    // Map DB check-constraint violations to 400
+    if (
+      typeof error === 'object' && error && 'code' in error &&
+      (error as { code?: string }).code === '23514'
+    ) {
+      return NextResponse.json({ error: 'FAQ validation failed.' }, { status: 400 })
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to create FAQ' },
       { status: 500 },

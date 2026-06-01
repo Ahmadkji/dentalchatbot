@@ -5,6 +5,11 @@ import { deleteFaqEntry, getFaqEntryForClinic, updateFaqEntry } from '@/lib/know
 import { enforceRateLimit } from '@/lib/rate-limit-guard'
 import { getClientIp } from '@/lib/security'
 
+const QUESTION_MIN = 3
+const QUESTION_MAX = 300
+const ANSWER_MIN = 3
+const ANSWER_MAX = 5000
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -39,17 +44,64 @@ export async function PATCH(
     }
 
     const body = await request.json().catch(() => null)
+
+    const nextQuestion = body?.question !== undefined ? String(body.question).trim() : undefined
+    const nextAnswer = body?.answer !== undefined ? String(body.answer).trim() : undefined
+    const nextCategory = body?.category !== undefined ? (body.category ? String(body.category).trim() : null) : undefined
+    const nextOrder = body?.order !== undefined ? Number(body.order) : undefined
+    const nextIsActive = body?.isActive !== undefined ? Boolean(body.isActive) : undefined
+
+    if (
+      nextQuestion === undefined &&
+      nextAnswer === undefined &&
+      nextCategory === undefined &&
+      nextOrder === undefined &&
+      nextIsActive === undefined
+    ) {
+      return NextResponse.json({ error: 'No fields to update.' }, { status: 400 })
+    }
+
+    if (nextQuestion !== undefined && (nextQuestion.length < QUESTION_MIN || nextQuestion.length > QUESTION_MAX)) {
+      return NextResponse.json(
+        { error: `question must be between ${QUESTION_MIN} and ${QUESTION_MAX} characters` },
+        { status: 400 },
+      )
+    }
+
+    if (nextAnswer !== undefined && (nextAnswer.length < ANSWER_MIN || nextAnswer.length > ANSWER_MAX)) {
+      return NextResponse.json(
+        { error: `answer must be between ${ANSWER_MIN} and ${ANSWER_MAX} characters` },
+        { status: 400 },
+      )
+    }
+
+    if (nextOrder !== undefined && (!Number.isInteger(nextOrder) || nextOrder < 1)) {
+      return NextResponse.json({ error: 'order must be a positive integer' }, { status: 400 })
+    }
+
     const updated = await updateFaqEntry(supabase, current.clinic.id, id, {
-      question: body?.question !== undefined ? String(body.question).trim() : undefined,
-      answer: body?.answer !== undefined ? String(body.answer).trim() : undefined,
-      category: body?.category !== undefined ? (body.category ? String(body.category).trim() : null) : undefined,
-      order: body?.order !== undefined ? Number(body.order) : undefined,
-      isActive: body?.isActive !== undefined ? Boolean(body.isActive) : undefined,
+      question: nextQuestion,
+      answer: nextAnswer,
+      category: nextCategory,
+      order: nextOrder,
+      isActive: nextIsActive,
     })
 
     return NextResponse.json(updated)
   } catch (error) {
-    console.error('Error updating FAQ:', error)
+    console.error('[faq:PATCH] Failed to update FAQ', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
+    // Map DB check-constraint violations to 400
+    if (
+      typeof error === 'object' && error && 'code' in error &&
+      (error as { code?: string }).code === '23514'
+    ) {
+      return NextResponse.json({ error: 'FAQ validation failed.' }, { status: 400 })
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update FAQ' },
       { status: 500 },
@@ -92,7 +144,10 @@ export async function DELETE(
 
     return NextResponse.json({ message: 'FAQ deleted successfully' })
   } catch (error) {
-    console.error('Error deleting FAQ:', error)
+    console.error('[faq:DELETE] Failed to delete FAQ', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to delete FAQ' },
       { status: 500 },

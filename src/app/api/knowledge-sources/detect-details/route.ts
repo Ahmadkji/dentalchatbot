@@ -134,7 +134,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ details: detectClinicDetails(source.content) })
   } catch (error) {
-    console.error('Error detecting details:', error)
+    console.error('[knowledge-sources:detect-details] Failed to detect details', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to detect clinic details' }, { status: 500 })
   }
 }

@@ -29,7 +29,10 @@ export function ResetPasswordForm() {
         if (active) {
           setHasSession(response.status !== 401)
         }
-      } catch {
+      } catch (error) {
+        console.error('[ResetPasswordForm] Session verification failed', {
+          error: error instanceof Error ? error.message : String(error),
+        })
         if (active) {
           setHasSession(true)
         }
@@ -76,7 +79,10 @@ export function ResetPasswordForm() {
       }
 
       setSuccess(true)
-    } catch {
+    } catch (error) {
+      console.error('[ResetPasswordForm] Network error during password update', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       setError('Network error. Please check your connection and try again.')
     } finally {
       setPending(false)

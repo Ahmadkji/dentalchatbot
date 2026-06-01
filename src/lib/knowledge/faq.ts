@@ -163,6 +163,21 @@ async function syncFaqKnowledgeSource(
   })
 }
 
+export async function syncFaqEntryKnowledgeSource(
+  supabase: SupabaseLikeClient,
+  clinicId: string,
+  faqId: string,
+) {
+  const faq = await getFaqEntryForClinic(supabase, clinicId, faqId)
+  if (!faq) {
+    throw new Error('FAQ not found for knowledge sync.')
+  }
+
+  await syncFaqKnowledgeSource(supabase, faq)
+  const refreshed = await getFaqEntryForClinic(supabase, clinicId, faqId)
+  return refreshed ? mapFaqRow(refreshed) : mapFaqRow(faq)
+}
+
 export async function createFaqEntry(
   supabase: SupabaseLikeClient,
   input: {

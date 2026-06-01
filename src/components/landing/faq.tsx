@@ -34,7 +34,7 @@ const faqs = [
   {
     question: "How much does DentalGPT Studio cost?",
     answer:
-      "DentalGPT Studio offers a free Starter plan so you can try it with no credit card required. The Professional plan is $49/month and includes unlimited conversations, appointment request collection, lead capture, after-hours coverage, and a full dashboard with insights.",
+      "DentalGPT Studio offers a free Starter plan so you can try it with no credit card required. The Starter plan includes AI conversations, basic FAQ training, lead capture, and the website widget embed. The Professional plan is $49/month and adds unlimited conversations, appointment request collection, after-hours coverage, and a full dashboard with insights.",
   },
   {
     question: "What kind of questions can the dental AI chatbot answer?",
@@ -44,7 +44,7 @@ const faqs = [
   {
     question: "Is there a free trial for dental clinics?",
     answer:
-      "Yes. The Starter plan is free forever with no credit card required. It includes AI conversations, basic FAQ training, and the website widget embed. You can upgrade to the Professional plan at any time for full lead capture, appointment requests, and dashboard access.",
+      "Yes. The Starter plan is free forever with no credit card required. It includes AI conversations, basic FAQ training, lead capture, and the website widget embed. You can upgrade to the Professional plan at any time for appointment requests, after-hours coverage, and advanced dashboard insights.",
   },
 ];
 

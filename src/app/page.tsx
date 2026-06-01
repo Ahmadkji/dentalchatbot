@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { getSiteUrl } from "@/lib/site-url";
 import { DentalHero } from "@/components/landing/hero";
 import { StatsTicker } from "@/components/landing/stats-ticker";
 import { PainPulseGrid } from "@/components/landing/pain-points";
@@ -69,8 +71,7 @@ const faqData = [
 ];
 
 /* ── JSON-LD Structured Data ── */
-const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL || "https://dentalgptstudio.com";
+const siteUrl = getSiteUrl();
 
 const jsonLdOrganization = {
   "@context": "https://schema.org",
@@ -158,36 +159,43 @@ const jsonLdBreadcrumb = {
 };
 
 /* ── Page Component (Server Component) ── */
-export default function HomePage() {
+export default async function HomePage() {
+  const nonce = (await headers()).get("x-nonce") ?? undefined
+
   return (
     <>
       {/* JSON-LD Structured Data */}
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLdOrganization).replace(/</g, "\\u003c"),
         }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLdWebSite).replace(/</g, "\\u003c"),
         }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLdSoftwareApp).replace(/</g, "\\u003c"),
         }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLdFAQ).replace(/</g, "\\u003c"),
         }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLdBreadcrumb).replace(/</g, "\\u003c"),
         }}

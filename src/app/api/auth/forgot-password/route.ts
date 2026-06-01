@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { assertSameOrigin, getClientIp } from '@/lib/security'
-import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
+import { consumeDistributedRateLimit, authEmailKey, authIpKey, forgotPasswordCooldownKey } from '@/lib/rate-limit'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
 
@@ -13,7 +13,12 @@ export async function POST(request: Request) {
 
   try {
     assertSameOrigin(request.headers.get('origin'), url)
-  } catch {
+  } catch (originError) {
+    console.error('[auth:forgot-password] CSRF origin check failed', {
+      origin: request.headers.get('origin'),
+      host: url.host,
+      error: originError instanceof Error ? originError.message : String(originError),
+    })
     return buildResponse({ error: 'Forbidden' }, 403)
   }
 
@@ -57,13 +62,35 @@ export async function POST(request: Request) {
     return response
   }
 
-  const cookieResponse = NextResponse.next()
+  // Email cooldown: prevent duplicate emails from concurrent/double-click requests
+  const cooldownPreset = forgotPasswordCooldownKey(email)
+  const cooldownResult = await consumeDistributedRateLimit(
+    cooldownPreset.key, cooldownPreset.limit, cooldownPreset.windowMs, 1, true
+  )
+  if (!cooldownResult.allowed) {
+    console.warn('[auth:forgot-password] Email cooldown active', { email, resetAt: cooldownResult.resetAt })
+    const response = buildResponse(
+      { error: 'Please wait a moment before requesting another reset link.', resetAt: cooldownResult.resetAt },
+      429
+    )
+    response.headers.set('Retry-After', String(Math.ceil((cooldownResult.resetAt - Date.now()) / 1000)))
+    return response
+  }
+
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (supabase) {
-    await supabase.auth.resetPasswordForEmail(email, {
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${url.origin}/reset-password`,
     })
+    if (resetError) {
+      console.error('[auth:forgot-password] Password reset attempt failed', {
+        error: resetError.message,
+        code: resetError.status ?? null,
+      })
+      // Still return success to prevent email enumeration
+    }
   }
 
   const response = buildResponse(

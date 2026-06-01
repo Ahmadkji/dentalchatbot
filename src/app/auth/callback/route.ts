@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   const code = searchParams.get('code')
   const next = sanitizeNextPath(searchParams.get('next'))
 
-  const cookieResponse = NextResponse.next()
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
   if (!supabase) {
     const response = NextResponse.redirect(new URL('/login?error=auth-config-missing', url.origin))

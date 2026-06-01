@@ -1,3 +1,7 @@
+import 'server-only'
+
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+
 const MAX_SESSIONS_PER_USER = 5
 const TOKEN_REFRESH_LOCK_TTL_MS = 5000
 
@@ -68,66 +72,111 @@ export interface SessionInfo {
   createdAt: number
 }
 
-interface SessionRegistryState {
-  sessions: Map<string, SessionInfo[]>
+function normalizeSessionId(sessionId: string): string {
+  return sessionId.trim()
 }
 
-const globalForSessionRegistry = globalThis as typeof globalThis & {
-  __sessionRegistryState__?: SessionRegistryState
+function normalizeSessionText(value: string, fallback: string, maxLength: number): string {
+  const trimmed = value.trim()
+  const normalized = trimmed.length > 0 ? trimmed : fallback
+  return normalized.slice(0, maxLength)
 }
-
-const sessionRegistryState: SessionRegistryState =
-  globalForSessionRegistry.__sessionRegistryState__ ?? {
-    sessions: new Map<string, SessionInfo[]>(),
-  }
-
-globalForSessionRegistry.__sessionRegistryState__ = sessionRegistryState
 
 /**
- * Register a new session for a user.
- * If the user already has MAX_SESSIONS_PER_USER sessions, the oldest is evicted.
+ * Register a new session for a user in shared Postgres storage.
+ * The database function evicts old sessions so every instance sees the same limit.
  */
-export function registerSession(
+export async function registerSession(
   userId: string,
   sessionId: string,
   ip: string,
-  userAgent: string,
-  now: number = Date.now()
-): void {
-  const existing = sessionRegistryState.sessions.get(userId) ?? []
-  const updated = existing.filter((s) => s.sessionId !== sessionId)
-  updated.push({ sessionId, ip, userAgent, createdAt: now })
+  userAgent: string
+): Promise<void> {
+  const admin = createSupabaseAdminClient()
+  const normalizedSessionId = normalizeSessionId(sessionId)
 
-  // Evict oldest sessions if over limit
-  while (updated.length > MAX_SESSIONS_PER_USER) {
-    updated.shift()
+  if (!normalizedSessionId) {
+    console.warn('[security:registerSession] skipping empty session key', { userId })
+    return
   }
 
-  sessionRegistryState.sessions.set(userId, updated)
-}
+  const { error } = await admin.rpc('register_user_session', {
+    p_user_id: userId,
+    p_session_key: normalizedSessionId,
+    p_ip: normalizeSessionText(ip, 'unknown', 128),
+    p_user_agent: normalizeSessionText(userAgent, 'unknown', 512),
+    p_max_sessions: MAX_SESSIONS_PER_USER,
+  })
 
-export function unregisterSession(userId: string, sessionId: string): void {
-  const existing = sessionRegistryState.sessions.get(userId)
-  if (!existing) return
-  const updated = existing.filter((s) => s.sessionId !== sessionId)
-  if (updated.length === 0) {
-    sessionRegistryState.sessions.delete(userId)
-  } else {
-    sessionRegistryState.sessions.set(userId, updated)
+  if (error) {
+    console.error('[security:registerSession] failed to persist session', {
+      userId,
+      error: error.message,
+    })
   }
 }
 
-export function getSessionCount(userId: string): number {
-  return sessionRegistryState.sessions.get(userId)?.length ?? 0
+export async function unregisterSession(userId: string, sessionId: string): Promise<void> {
+  const admin = createSupabaseAdminClient()
+  const { error } = await admin
+    .from('user_sessions')
+    .delete()
+    .match({
+      user_id: userId,
+      session_key: normalizeSessionId(sessionId),
+    })
+
+  if (error) {
+    console.error('[security:unregisterSession] failed to remove session', {
+      userId,
+      error: error.message,
+    })
+  }
 }
 
-export function clearSessionRegistry() {
-  sessionRegistryState.sessions.clear()
+export async function getSessionCount(userId: string): Promise<number> {
+  const admin = createSupabaseAdminClient()
+  const { count, error } = await admin
+    .from('user_sessions')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+
+  if (error) {
+    console.error('[security:getSessionCount] failed to read session count', {
+      userId,
+      error: error.message,
+    })
+    return 0
+  }
+
+  return count ?? 0
 }
 
-/** Clear all sessions for a user from the in-memory registry. */
-export function clearUserSessions(userId: string): void {
-  sessionRegistryState.sessions.delete(userId)
+export async function clearSessionRegistry(): Promise<void> {
+  const admin = createSupabaseAdminClient()
+  const { error } = await admin.from('user_sessions').delete()
+
+  if (error) {
+    console.error('[security:clearSessionRegistry] failed to clear session registry', {
+      error: error.message,
+    })
+  }
+}
+
+/** Clear all sessions for a user from shared storage. */
+export async function clearUserSessions(userId: string): Promise<void> {
+  const admin = createSupabaseAdminClient()
+  const { error } = await admin
+    .from('user_sessions')
+    .delete()
+    .eq('user_id', userId)
+
+  if (error) {
+    console.error('[security:clearUserSessions] failed to clear user sessions', {
+      userId,
+      error: error.message,
+    })
+  }
 }
 
 // --------------- Safe Logging ---------------

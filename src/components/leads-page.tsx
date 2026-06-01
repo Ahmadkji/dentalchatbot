@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Table,
   TableBody,
@@ -12,8 +12,6 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
@@ -31,14 +29,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Search, Plus, MoreHorizontal, Eye } from 'lucide-react'
+import { Search, MoreHorizontal, Eye } from 'lucide-react'
 import { toast } from 'sonner'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import LeadCollectionSettings from './lead-collection-settings'
 
 interface Lead {
   id: string
+  conversationId: string | null
   name: string
   phone: string
+  email?: string | null
   question: string
   service?: string | null
   preferredDate?: string | null
@@ -48,7 +49,10 @@ interface Lead {
   preferredContact: string
   source: string
   status: string
+  closedReason?: string | null
+  lastContactedAt?: string | null
   createdAt: string
+  updatedAt: string
 }
 
 const statusColors: Record<string, string> = {
@@ -68,41 +72,45 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-const emptyForm = {
-  name: '',
-  phone: '',
-  question: '',
-  service: '',
-  preferredDate: '',
-  preferredTime: '',
-  message: '',
-  preferredContact: 'phone',
-  source: 'website',
-}
-
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([])
+  const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [form, setForm] = useState(emptyForm)
   const [activeTab, setActiveTab] = useState<'leads' | 'settings'>('leads')
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   const fetchLeads = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const params = new URLSearchParams()
+      params.set('page', '1')
+      params.set('pageSize', '1000')
       if (statusFilter && statusFilter !== 'all') params.set('status', statusFilter)
       const res = await fetch(`/api/leads?${params.toString()}`)
-      if (res.ok) {
-        const data = await res.json()
-        setLeads(data.leads || data || [])
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to load leads')
+      const data = await res.json()
+      const nextLeads = data.leads || data || []
+      setLeads(nextLeads)
+      setTotalCount(
+        typeof data.totalCount === 'number'
+          ? data.totalCount
+          : Array.isArray(nextLeads)
+            ? nextLeads.length
+            : 0,
+      )
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[LeadsPage] Failed to fetch leads', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load leads')
     } finally {
       setLoading(false)
@@ -117,42 +125,15 @@ export default function LeadsPage() {
     return () => window.clearTimeout(timer)
   }, [fetchLeads])
 
+  // Re-fetch leads when user switches back to this tab.
+  // Disabled while the detail dialog is open to avoid disrupting the user's view.
+  useRefetchOnFocus(fetchLeads, !detailDialogOpen)
+
   const filteredLeads = leads.filter((l) =>
     l.name.toLowerCase().includes(search.toLowerCase()) ||
     (l.phone || '').includes(search) ||
     (l.question || '').toLowerCase().includes(search.toLowerCase())
   )
-
-  const handleAdd = async () => {
-    if (!form.name.trim()) {
-      toast.error('Name is required')
-      return
-    }
-    if (!form.phone.trim()) {
-      toast.error('Phone is required')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const res = await fetch('/api/leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-      if (res.ok) {
-        toast.success('Lead added successfully')
-        setAddDialogOpen(false)
-        setForm(emptyForm)
-        fetchLeads()
-      } else {
-        toast.error('Failed to add lead')
-      }
-    } catch {
-      toast.error('Failed to add lead')
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   const updateStatus = async (id: string, status: string) => {
     try {
@@ -161,13 +142,15 @@ export default function LeadsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       })
-      if (res.ok) {
-        toast.success(`Status updated to ${status}`)
-        fetchLeads()
-      } else {
-        toast.error('Failed to update status')
-      }
-    } catch {
+      if (!res.ok) throw new Error('Failed to update status')
+      toast.success(`Status updated to ${status}`)
+      fetchLeads()
+    } catch (error) {
+      console.error('[LeadsPage] Failed to update lead status', {
+        leadId: id,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to update status')
     }
   }
@@ -223,99 +206,14 @@ export default function LeadsPage() {
             className="h-8 pl-8 text-sm"
           />
         </div>
-        <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-          <Button
-            size="sm"
-            className="h-8 w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
-            onClick={() => {
-              setForm(emptyForm)
-              setAddDialogOpen(true)
-            }}
-          >
-            <Plus className="size-3.5 mr-1" />
-            Add Lead
-          </Button>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Lead</DialogTitle>
-              <DialogDescription>Enter the lead&apos;s information below.</DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="lead-name">Name *</Label>
-                <Input
-                  id="lead-name"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="John Doe"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lead-phone">Phone</Label>
-                <Input
-                  id="lead-phone"
-                  value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  placeholder="(555) 123-4567"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lead-question">Question</Label>
-                <Textarea
-                  id="lead-question"
-                  value={form.question}
-                  onChange={(e) => setForm({ ...form, question: e.target.value })}
-                  placeholder="What is the lead asking about?"
-                  rows={3}
-                />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="lead-service">Service</Label>
-                  <Input
-                    id="lead-service"
-                    value={form.service}
-                    onChange={(e) => setForm({ ...form, service: e.target.value })}
-                    placeholder="Dental cleaning"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="lead-date">Preferred Date</Label>
-                  <Input
-                    id="lead-date"
-                    type="date"
-                    value={form.preferredDate}
-                    onChange={(e) => setForm({ ...form, preferredDate: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lead-message">Message</Label>
-                <Input
-                  id="lead-message"
-                  value={form.message}
-                  onChange={(e) => setForm({ ...form, message: e.target.value })}
-                  placeholder="Short note"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setAddDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleAdd}
-                disabled={submitting}
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                {submitting ? 'Adding...' : 'Add Lead'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
 
       {/* Leads Table */}
+      {totalCount > leads.length ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Showing the first {leads.length} of {totalCount} leads. Search currently works across the loaded leads only.
+        </div>
+      ) : null}
       <div className="rounded-md border bg-white">
         <div className="max-h-[600px] overflow-y-auto">
           <Table className="min-w-[540px] sm:min-w-[700px]">
@@ -406,7 +304,7 @@ export default function LeadsPage() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                    No leads found. Adjust filters or add a new lead.
+                    No leads found. Adjust filters or wait for new chat leads.
                   </TableCell>
                 </TableRow>
               )}
@@ -417,55 +315,75 @@ export default function LeadsPage() {
 
       {/* Detail Dialog */}
       <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Lead Details</DialogTitle>
             <DialogDescription>Full information for this lead.</DialogDescription>
           </DialogHeader>
           {selectedLead && (
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Name</p>
-                  <p className="text-sm font-medium">{selectedLead.name}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Phone</p>
-                  <p className="text-sm">{selectedLead.phone || '—'}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Service</p>
-                  <p className="text-sm">{selectedLead.service || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Preferred Date</p>
-                  <p className="text-sm">{selectedLead.preferredDate || '—'}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Status</p>
-                  <StatusBadge status={selectedLead.status} />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Created</p>
-                  <p className="text-sm">{formatDate(selectedLead.createdAt)}</p>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Question</p>
-                <p className="text-sm whitespace-pre-wrap">
-                  {selectedLead.question || 'No question provided'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Message</p>
-                <p className="text-sm whitespace-pre-wrap">
-                  {selectedLead.message || '—'}
-                </p>
-              </div>
+            <div className="rounded-md border overflow-hidden">
+              <Table>
+                <TableBody>
+                  <TableRow>
+                    <TableHead className="w-[140px] bg-slate-50/80">Name</TableHead>
+                    <TableCell className="font-medium">{selectedLead.name}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Phone</TableHead>
+                    <TableCell>{selectedLead.phone || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Email</TableHead>
+                    <TableCell>{selectedLead.email || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Service</TableHead>
+                    <TableCell>{selectedLead.service || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Preferred Date</TableHead>
+                    <TableCell>{selectedLead.preferredDate || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Preferred Contact</TableHead>
+                    <TableCell className="capitalize">{selectedLead.preferredContact || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Source</TableHead>
+                    <TableCell className="uppercase text-xs">{selectedLead.source || '—'}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Status</TableHead>
+                    <TableCell><StatusBadge status={selectedLead.status} /></TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Created</TableHead>
+                    <TableCell>{formatDate(selectedLead.createdAt)}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableHead className="bg-slate-50/80">Question</TableHead>
+                    <TableCell className="whitespace-pre-wrap">{selectedLead.question || 'No question provided'}</TableCell>
+                  </TableRow>
+                  {selectedLead.message && (
+                    <TableRow>
+                      <TableHead className="bg-slate-50/80">Message</TableHead>
+                      <TableCell className="whitespace-pre-wrap">{selectedLead.message}</TableCell>
+                    </TableRow>
+                  )}
+                  {selectedLead.internalNote && (
+                    <TableRow>
+                      <TableHead className="bg-slate-50/80">Internal Note</TableHead>
+                      <TableCell className="whitespace-pre-wrap">{selectedLead.internalNote}</TableCell>
+                    </TableRow>
+                  )}
+                  {selectedLead.closedReason && (
+                    <TableRow>
+                      <TableHead className="bg-slate-50/80">Closed Reason</TableHead>
+                      <TableCell>{selectedLead.closedReason}</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </div>
           )}
           <DialogFooter>

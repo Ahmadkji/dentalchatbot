@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { ZodError } from 'zod'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { enforceRateLimit } from '@/lib/rate-limit-guard'
 import { getClientIp } from '@/lib/security'
+import {
+  getLeadConflictMessage,
+  leadCreateSchema,
+  mapLeadRow,
+  parseLeadListQuery,
+} from '@/lib/leads/lead-contract'
 
 export async function GET(request: NextRequest) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -17,25 +24,43 @@ export async function GET(request: NextRequest) {
     }
 
     const searchParams = request.nextUrl.searchParams
-    const status = searchParams.get('status')
+    const parsedQuery = parseLeadListQuery({
+      status: searchParams.get('status') ?? undefined,
+      page: searchParams.get('page'),
+      pageSize: searchParams.get('pageSize'),
+    })
+    const from = (parsedQuery.page - 1) * parsedQuery.pageSize
+    const to = from + parsedQuery.pageSize - 1
 
     let query = supabase
       .from('leads')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('clinic_id', current.clinic.id)
       .order('created_at', { ascending: false })
+      .range(from, to)
 
-    if (status) {
-      query = query.eq('status', status)
+    if (parsedQuery.status) {
+      query = query.eq('status', parsedQuery.status)
     }
 
-    const { data: leads, error } = await query
+    const { data: leads, error, count } = await query
 
     if (error) throw error
 
-    return NextResponse.json(leads)
+    return NextResponse.json({
+      leads: (leads ?? []).map((row) => mapLeadRow(row)),
+      page: parsedQuery.page,
+      pageSize: parsedQuery.pageSize,
+      totalCount: count ?? (leads ?? []).length,
+    })
   } catch (error) {
-    console.error('Error fetching leads:', error)
+    if (error instanceof ZodError) {
+      return NextResponse.json({ error: 'Invalid leads query parameters' }, { status: 400 })
+    }
+    console.error('[leads:GET] Failed to fetch leads', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 })
   }
 }
@@ -60,21 +85,23 @@ export async function POST(request: NextRequest) {
     })
     if (rl) return rl
 
-    const body = await request.json()
-    const { name, phone, question, preferredContact, source, service, preferredDate, preferredTime, message, internalNote, conversationId } = body
-
-    if (!name || !phone) {
-      return NextResponse.json({ error: 'name and phone are required' }, { status: 400 })
+    const parsed = leadCreateSchema.safeParse(await request.json().catch(() => null))
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Invalid lead payload' },
+        { status: 400 },
+      )
     }
+    const input = parsed.data
 
     const adminClient = createSupabaseAdminClient()
     let resolvedConversationId: string | null = null
 
-    if (conversationId) {
+    if (input.conversationId) {
       const { data: conversation } = await adminClient
         .from('conversations')
         .select('id')
-        .eq('id', String(conversationId))
+        .eq('id', String(input.conversationId))
         .eq('clinic_id', current.clinic.id)
         .maybeSingle()
 
@@ -90,36 +117,54 @@ export async function POST(request: NextRequest) {
       .insert({
         clinic_id: current.clinic.id,
         conversation_id: resolvedConversationId,
-        name,
-        phone,
-        question: question || '',
-        service: service || null,
-        preferred_date: preferredDate || null,
-        preferred_time: preferredTime || null,
-        message: message || null,
-        internal_note: internalNote || null,
-        preferred_contact: preferredContact || 'phone',
-        status: 'new',
-        source: source || 'chatbot',
+        name: input.name,
+        phone: input.phone,
+        email: input.email,
+        question: input.question,
+        service: input.service,
+        preferred_date: input.preferredDate,
+        preferred_time: input.preferredTime,
+        message: input.message,
+        internal_note: input.internalNote,
+        preferred_contact: input.preferredContact,
+        status: input.status,
+        source: input.source,
       })
       .select('*')
       .single()
 
-    if (error) throw error
+    if (error) {
+      const conflictMessage = getLeadConflictMessage(error)
+      if (conflictMessage) {
+        return NextResponse.json({ error: conflictMessage }, { status: 409 })
+      }
+      throw error
+    }
 
     if (resolvedConversationId) {
-      await adminClient
+      const { error: convUpdateError } = await adminClient
         .from('conversations')
         .update({
           lead_captured: true,
-          visitor_name: String(name),
+          visitor_name: String(input.name),
         })
         .eq('id', resolvedConversationId)
+
+      if (convUpdateError) {
+        console.error('[leads:POST] Failed to mark conversation lead_captured', {
+          conversationId: resolvedConversationId,
+          error: convUpdateError.message,
+        })
+        // Don't fail the request — the lead was created successfully
+      }
     }
 
-    return NextResponse.json(lead, { status: 201 })
+    return NextResponse.json(mapLeadRow(lead), { status: 201 })
   } catch (error) {
-    console.error('Error creating lead:', error)
+    console.error('[leads:POST] Failed to create lead', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
   }
 }

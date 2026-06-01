@@ -20,6 +20,7 @@ export interface CurrentClinic {
   website_url: string | null
   map_link: string | null
   pricing_notes: string | null
+  default_currency: string
   appointment_rules: string | null
   emergency_instructions: string | null
   status: 'active' | 'disabled' | 'deleted'
@@ -56,6 +57,7 @@ export interface CurrentClinicAiProfile {
   website_url: string | null
   map_link: string | null
   pricing_notes: string | null
+  default_currency: string
   appointment_rules: string | null
   emergency_instructions: string | null
   profile_completed: boolean
@@ -84,9 +86,14 @@ export interface CurrentClinicAiProfile {
     name: string
     description: string | null
     category: string | null
+    price_type: 'fixed' | 'starting_from' | 'range' | 'free' | 'quote_required'
     price_amount: number | null
+    price_min_amount: number | null
+    price_max_amount: number | null
     price_currency: string | null
     pricing_note: string | null
+    is_price_visible_to_chatbot: boolean
+    requires_consultation: boolean
     duration_minutes: number
     sort_order: number
   }>
@@ -137,7 +144,7 @@ export async function getCurrentClinic(
 
   const { data: clinic, error: clinicError } = await supabase
     .from('clinics')
-    .select('id,name,slug,country,city,address,timezone,phone,whatsapp,website_url,map_link,pricing_notes,appointment_rules,emergency_instructions,status,owner_id,profile_completed,is_live')
+    .select('id,name,slug,country,city,address,timezone,phone,whatsapp,website_url,map_link,pricing_notes,default_currency,appointment_rules,emergency_instructions,status,owner_id,profile_completed,is_live')
     .eq('id', profile.default_clinic_id)
     .neq('status', 'deleted')
     .maybeSingle()
@@ -177,7 +184,7 @@ export async function getClinicServices(
 ) {
   let query = supabase
     .from('services')
-    .select('id,clinic_id,name,description,category,price_amount,price_currency,pricing_note,duration_minutes,is_active,sort_order,created_at,updated_at')
+    .select('id,clinic_id,name,description,category,price_type,price_amount,price_min_amount,price_max_amount,price_currency,pricing_note,is_price_visible_to_chatbot,requires_consultation,duration_minutes,is_active,sort_order,created_at,updated_at')
     .eq('clinic_id', clinicId)
     .order('sort_order', { ascending: true })
     .order('name', { ascending: true })
@@ -260,6 +267,7 @@ export function mapClinicToAppProfile(clinic: CurrentClinic, hours: ClinicHourRe
     openingHours: formatClinicHoursSummary(hours),
     appointmentRules: clinic.appointment_rules ?? '',
     pricingNotes: clinic.pricing_notes ?? '',
+    defaultCurrency: clinic.default_currency,
     emergencyInstructions: clinic.emergency_instructions ?? '',
     timezone: clinic.timezone,
     modelMode: 'balanced',

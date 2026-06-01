@@ -30,6 +30,7 @@ const plans = [
     features: [
       { icon: MessageSquare, label: "AI conversations" },
       { icon: Sparkles, label: "Basic FAQ training" },
+      { icon: UserPlus, label: "Lead capture" },
       { icon: Zap, label: "Website widget embed" },
       { icon: Clock, label: "Email support" },
     ],
@@ -76,7 +77,7 @@ const roiItems = [
 const comparisonRows = [
   { feature: "AI Conversations", starter: "✓", pro: "✓" },
   { feature: "Appointment Requests", starter: "—", pro: "✓" },
-  { feature: "Lead Capture", starter: "—", pro: "✓" },
+  { feature: "Lead Capture", starter: "\u2713", pro: "\u2713" },
   { feature: "Custom Branding", starter: "—", pro: "✓" },
   { feature: "After-Hours Capture", starter: "—", pro: "✓" },
   { feature: "Dashboard & Insights", starter: "—", pro: "✓" },

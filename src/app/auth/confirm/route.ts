@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const type = url.searchParams.get('type') as 'signup' | 'recovery' | 'email_change' | null
   const next = sanitizeNextPath(url.searchParams.get('next'))
 
-  const cookieResponse = NextResponse.next()
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (!supabase) {

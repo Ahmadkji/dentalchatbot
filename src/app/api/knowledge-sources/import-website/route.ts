@@ -1,4 +1,4 @@
-import { normalizeKnowledgeImportUrl } from '@/lib/knowledge-import'
+import { normalizeKnowledgeImportUrlForStorage } from '@/lib/knowledge-import'
 import { after, NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
@@ -9,8 +9,10 @@ import {
   findKnowledgeSourceByUrl,
   mapKnowledgeSource,
   updateKnowledgeSourceDraft,
+  getActiveKnowledgeSourceCount,
+  MAX_KNOWLEDGE_SOURCES_PER_CLINIC,
 } from '@/lib/knowledge/sources'
-import { enqueueKnowledgeJob, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
+import { enqueueKnowledgeJob, mapKnowledgeJobProgress, processQueuedKnowledgeJobs } from '@/lib/knowledge/jobs'
 
 export const maxDuration = 30
 
@@ -40,13 +42,25 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => null)
     const url = String(body?.url ?? '').trim()
+    const importMode = String(body?.importMode ?? '').trim() === 'homepage' ? 'homepage' : 'website'
 
     if (!url) {
       return NextResponse.json({ error: 'url is required' }, { status: 400 })
     }
 
-    const normalizedUrl = normalizeKnowledgeImportUrl(url).toString()
+    const normalizedUrl = normalizeKnowledgeImportUrlForStorage(url)
     const duplicate = await findKnowledgeSourceByUrl(supabase, current.clinic.id, normalizedUrl)
+
+    // Duplicate re-import doesn't count against the limit
+    if (!duplicate) {
+      const activeCount = await getActiveKnowledgeSourceCount(supabase, current.clinic.id)
+      if (activeCount >= MAX_KNOWLEDGE_SOURCES_PER_CLINIC) {
+        return NextResponse.json(
+          { error: `You have reached the maximum of ${MAX_KNOWLEDGE_SOURCES_PER_CLINIC} knowledge sources. Please delete some before adding new ones.` },
+          { status: 429 },
+        )
+      }
+    }
 
     if (duplicate) {
       await updateKnowledgeSourceDraft(supabase, current.clinic.id, duplicate.id, {
@@ -58,24 +72,40 @@ export async function POST(request: NextRequest) {
         metadata: {
           ...(duplicate.metadata ?? {}),
           importedUrl: normalizedUrl,
-          importMode: 'website',
+          importMode,
         },
       })
 
-      await enqueueKnowledgeJob(supabase, {
+      const queuedJob = await enqueueKnowledgeJob(supabase, {
         clinicId: current.clinic.id,
         sourceId: duplicate.id,
         jobType: 'import_website_source',
         payload: {
           url: normalizedUrl,
-          importMode: 'website',
+          importMode,
         },
       })
 
-      after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch(() => {}))
+      after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch((bgError) => {
+        console.error('[knowledge-sources:import-website] Background job processing failed', {
+          runner: 'api-import-website',
+          error: bgError instanceof Error ? bgError.message : String(bgError),
+        })
+      }))
 
       const updated = await findKnowledgeSourceByUrl(supabase, current.clinic.id, normalizedUrl)
-      return NextResponse.json(updated ? mapKnowledgeSource(updated) : null, { status: 202 })
+      return NextResponse.json(
+        updated
+          ? {
+              ...mapKnowledgeSource(updated),
+              job: mapKnowledgeJobProgress(queuedJob),
+              message: importMode === 'homepage'
+                ? 'Homepage crawl queued for AI optimization.'
+                : 'Website page import queued for AI optimization.',
+            }
+          : null,
+        { status: 202 },
+      )
     }
 
     const created = await createKnowledgeSourceDraft(supabase, {
@@ -87,26 +117,45 @@ export async function POST(request: NextRequest) {
       createdBy: user.id,
       metadata: {
         importedUrl: normalizedUrl,
-        importMode: 'website',
+        importMode,
       },
       status: 'queued',
     })
 
-    await enqueueKnowledgeJob(supabase, {
+    const queuedJob = await enqueueKnowledgeJob(supabase, {
       clinicId: current.clinic.id,
       sourceId: created.id,
       jobType: 'import_website_source',
       payload: {
         url: normalizedUrl,
-        importMode: 'website',
+        importMode,
       },
     })
 
-    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch(() => {}))
+    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-import-website' }).catch((bgError) => {
+      console.error('[knowledge-sources:import-website] Background job processing failed', {
+        runner: 'api-import-website',
+        error: bgError instanceof Error ? bgError.message : String(bgError),
+      })
+    }))
 
-    return NextResponse.json(created ? mapKnowledgeSource(created) : null, { status: 202 })
+    return NextResponse.json(
+      created
+        ? {
+            ...mapKnowledgeSource(created),
+            job: mapKnowledgeJobProgress(queuedJob),
+            message: importMode === 'homepage'
+              ? 'Homepage crawl queued for AI optimization.'
+              : 'Website page import queued for AI optimization.',
+          }
+        : null,
+      { status: 202 },
+    )
   } catch (error) {
-    console.error('Error importing website:', error)
+    console.error('[knowledge-sources:import-website] Failed to import website', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to import website' }, { status: 500 })
   }
 }

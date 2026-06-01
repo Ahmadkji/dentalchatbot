@@ -1,33 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
-import { normalizeServiceInput, serviceCreateSchema } from '@/lib/clinics/validation'
-
-function mapService(row: Record<string, unknown>) {
-  return {
-    id: row.id,
-    clinicId: row.clinic_id,
-    name: row.name,
-    description: row.description,
-    category: row.category,
-    priceAmount: row.price_amount,
-    priceCurrency: row.price_currency,
-    pricingNote: row.pricing_note,
-    durationMinutes: row.duration_minutes,
-    isActive: row.is_active,
-    sortOrder: row.sort_order,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    price: row.price_amount !== null && row.price_amount !== undefined && row.price_currency
-      ? `${row.price_currency} ${row.price_amount}`
-      : row.pricing_note ?? null,
-  }
-}
+import { normalizeServiceInput, serviceCreateSchema, serviceUpdateSchema } from '@/lib/clinics/validation'
+import { mapServiceRow, serviceSelectFields } from '@/lib/clinics/services'
 
 async function getServiceForClinic(serviceId: string, clinicId: string, supabase: NonNullable<Awaited<ReturnType<typeof requireAuth>>['supabase']>) {
   const { data, error } = await supabase
     .from('services')
-    .select('id,clinic_id,name,description,category,price_amount,price_currency,pricing_note,duration_minutes,is_active,sort_order,created_at,updated_at')
+    .select(serviceSelectFields)
     .eq('id', serviceId)
     .eq('clinic_id', clinicId)
     .maybeSingle()
@@ -60,29 +40,44 @@ export async function PATCH(request: NextRequest, context: RouteContext<'/api/se
     }
 
     const body = await request.json().catch(() => null)
-    const parsed = serviceCreateSchema.partial().safeParse(body)
+    const parsed = serviceUpdateSchema.safeParse(body)
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid service payload.' }, { status: 400 })
     }
 
-    const payload = normalizeServiceInput({
-      name: parsed.data.name ?? String(existing.name),
-      description: parsed.data.description ?? (existing.description as string | null),
-      category: parsed.data.category ?? (existing.category as string | null),
-      price_amount: parsed.data.price_amount ?? (existing.price_amount as number | null),
-      price_currency: parsed.data.price_currency ?? (existing.price_currency as string | null),
-      pricing_note: parsed.data.pricing_note ?? (existing.pricing_note as string | null),
-      duration_minutes: parsed.data.duration_minutes ?? Number(existing.duration_minutes),
-      is_active: parsed.data.is_active ?? Boolean(existing.is_active),
-      sort_order: parsed.data.sort_order ?? Number(existing.sort_order),
-    })
+    const mergeField = <T>(partial: T | undefined, existing: T): T =>
+      partial !== undefined ? partial : existing
+
+    const mergedInput = {
+      name: mergeField(parsed.data.name, String(existing.name)),
+      description: mergeField(parsed.data.description, existing.description as string | null),
+      category: mergeField(parsed.data.category, existing.category as string | null),
+      price_type: mergeField(parsed.data.price_type, String(existing.price_type ?? 'fixed')),
+      price_amount: mergeField(parsed.data.price_amount, existing.price_amount as number | null),
+      price_min_amount: mergeField(parsed.data.price_min_amount, existing.price_min_amount as number | null),
+      price_max_amount: mergeField(parsed.data.price_max_amount, existing.price_max_amount as number | null),
+      price_currency: mergeField(parsed.data.price_currency, existing.price_currency as string | null),
+      pricing_note: mergeField(parsed.data.pricing_note, existing.pricing_note as string | null),
+      duration_minutes: mergeField(parsed.data.duration_minutes, Number(existing.duration_minutes)),
+      is_active: mergeField(parsed.data.is_active, Boolean(existing.is_active)),
+      sort_order: mergeField(parsed.data.sort_order, Number(existing.sort_order)),
+      is_price_visible_to_chatbot: mergeField(parsed.data.is_price_visible_to_chatbot, Boolean(existing.is_price_visible_to_chatbot)),
+      requires_consultation: mergeField(parsed.data.requires_consultation, Boolean(existing.requires_consultation)),
+    }
+
+    const fullParsed = serviceCreateSchema.safeParse(mergedInput)
+    if (!fullParsed.success) {
+      return NextResponse.json({ error: fullParsed.error.issues[0]?.message ?? 'Invalid service payload.' }, { status: 400 })
+    }
+
+    const payload = normalizeServiceInput(fullParsed.data)
 
     const { data, error } = await supabase
       .from('services')
       .update(payload)
       .eq('id', serviceId)
       .eq('clinic_id', current.clinic.id)
-      .select('id,clinic_id,name,description,category,price_amount,price_currency,pricing_note,duration_minutes,is_active,sort_order,created_at,updated_at')
+      .select(serviceSelectFields)
       .single()
 
     if (error) {
@@ -105,9 +100,12 @@ export async function PATCH(request: NextRequest, context: RouteContext<'/api/se
       }),
     ])
 
-    return NextResponse.json(mapService(data as Record<string, unknown>))
+    return NextResponse.json(mapServiceRow(data as Record<string, unknown>, current.clinic.default_currency))
   } catch (error) {
-    console.error('Error updating service:', error)
+    console.error('[services:PATCH] Failed to update service', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update service' }, { status: 500 })
   }
 }
@@ -159,7 +157,10 @@ export async function DELETE(_request: NextRequest, context: RouteContext<'/api/
 
     return NextResponse.json({ ok: true })
   } catch (error) {
-    console.error('Error deactivating service:', error)
+    console.error('[services:DELETE] Failed to deactivate service', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to deactivate service' }, { status: 500 })
   }
 }

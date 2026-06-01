@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { getLeadConflictMessage, leadPatchSchema, mapLeadRow } from '@/lib/leads/lead-contract'
 
 export async function PATCH(
   request: NextRequest,
@@ -10,16 +11,13 @@ export async function PATCH(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
     const current = await getCurrentClinic(supabase, user)
     if (!current.clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
-
-    const { id } = await params
-    const body = await request.json()
-    const { status, name, phone, question, preferredContact, service, preferredDate, preferredTime, message, internalNote } = body
 
     // Verify lead belongs to this clinic
     const adminClient = createSupabaseAdminClient()
@@ -35,30 +33,36 @@ export async function PATCH(
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
-    const updateData: Record<string, unknown> = {}
-    if (status !== undefined) updateData.status = status
-    if (name !== undefined) updateData.name = name
-    if (phone !== undefined) updateData.phone = phone
-    if (question !== undefined) updateData.question = question
-    if (preferredContact !== undefined) updateData.preferred_contact = preferredContact
-    if (service !== undefined) updateData.service = service
-    if (preferredDate !== undefined) updateData.preferred_date = preferredDate
-    if (preferredTime !== undefined) updateData.preferred_time = preferredTime
-    if (message !== undefined) updateData.message = message
-    if (internalNote !== undefined) updateData.internal_note = internalNote
+    const parsed = leadPatchSchema.safeParse(await request.json().catch(() => null))
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Invalid lead payload' },
+        { status: 400 },
+      )
+    }
 
     const { data: lead, error } = await adminClient
       .from('leads')
-      .update(updateData)
+      .update(parsed.data)
       .eq('id', id)
       .select('*')
       .single()
 
-    if (error) throw error
+    if (error) {
+      const conflictMessage = getLeadConflictMessage(error)
+      if (conflictMessage) {
+        return NextResponse.json({ error: conflictMessage }, { status: 409 })
+      }
+      throw error
+    }
 
-    return NextResponse.json(lead)
+    return NextResponse.json(mapLeadRow(lead))
   } catch (error) {
-    console.error('Error updating lead:', error)
+    console.error('[leads:PATCH] Failed to update lead', {
+      leadId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 })
   }
 }
@@ -70,14 +74,13 @@ export async function DELETE(
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
   if (!user || !supabase) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
 
   try {
     const current = await getCurrentClinic(supabase, user)
     if (!current.clinic) {
       return NextResponse.json({ error: 'Onboarding required' }, { status: 409 })
     }
-
-    const { id } = await params
 
     const adminClient = createSupabaseAdminClient()
 
@@ -103,7 +106,11 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error deleting lead:', error)
+    console.error('[leads:DELETE] Failed to delete lead', {
+      leadId: id,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to delete lead' }, { status: 500 })
   }
 }

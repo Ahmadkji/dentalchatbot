@@ -34,7 +34,10 @@ export async function GET() {
 
     return NextResponse.json((prompts as QuickPromptRow[]).map((row) => mapWidgetQuickPromptRow(row, promptOptions)))
   } catch (error) {
-    console.error('Error fetching quick prompts:', error)
+    console.error('[quick-prompts:GET] Failed to fetch quick prompts', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch quick prompts' }, { status: 500 })
   }
 }
@@ -70,13 +73,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const parsedSortOrder = Number(sortOrder)
+    const normalizedSortOrder = Number.isFinite(parsedSortOrder)
+      ? Math.max(1, Math.floor(parsedSortOrder))
+      : 99
+
     const { data: prompt, error } = await supabase
       .from('quick_prompts')
       .insert({
         clinic_id: clinic.id,
         label: label.trim(),
         intent: normalizedIntent,
-        sort_order: Number(sortOrder) || 99,
+        sort_order: normalizedSortOrder,
         is_active: isActive !== undefined ? Boolean(isActive) : true,
       })
       .select('id,clinic_id,label,intent,sort_order,is_active,created_at,updated_at')
@@ -89,7 +97,10 @@ export async function POST(request: NextRequest) {
     const promptOptions = { whatsapp: clinic.whatsapp || null }
     return NextResponse.json(mapWidgetQuickPromptRow(prompt as QuickPromptRow, promptOptions), { status: 201 })
   } catch (error) {
-    console.error('Error creating quick prompt:', error)
+    console.error('[quick-prompts:POST] Failed to create quick prompt', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to create quick prompt' }, { status: 500 })
   }
 }

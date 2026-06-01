@@ -1,9 +1,19 @@
 import 'server-only'
 
 import type { createSupabaseRouteClient } from '@/lib/supabase/route-client'
-import { importWebsiteContent } from '@/lib/knowledge-import'
+import { importWebsiteContent, normalizeKnowledgeImportUrlForStorage } from '@/lib/knowledge-import'
 import { clinicProfileUpdateSchema, normalizeClinicProfileUpdate } from '@/lib/clinics/validation'
 import { getCurrentClinicSnapshot, mapClinicToAppProfile } from '@/lib/clinics/current'
+import { extractWebsiteAutofill, type WebsiteAutofill } from '@/lib/ai/website-autofill'
+import {
+  buildAutofillDetectedFields,
+  buildBotSettingsFromAutofill,
+  buildClinicHoursFromAutofill,
+  buildClinicProfileUpdatePolicyFromAutofill,
+  buildClinicSettingsFromAutofill,
+  buildServicePayloadsFromAutofill,
+  buildWidgetSettingsFromAutofill,
+} from '@/lib/clinic-imports/autofill'
 
 type SupabaseRouteClient = NonNullable<Awaited<ReturnType<typeof createSupabaseRouteClient>>>
 
@@ -103,6 +113,22 @@ interface RawDetectedField {
   value: string
   confidence: number
   sourceSnippet: string
+}
+
+function mapAutofillDetectedFields(
+  autofill: WebsiteAutofill,
+  sourceUrl: string,
+) {
+  return buildAutofillDetectedFields(autofill).map((field) => ({
+    import_session_id: '',
+    field_type: field.fieldType,
+    detected_value: field.detectedValue,
+    source_url: field.sourceUrl || sourceUrl,
+    source_text_snippet: field.sourceTextSnippet,
+    confidence: field.confidence,
+    approved: true,
+    approved_value: field.detectedValue,
+  }))
 }
 
 function confidenceLabel(confidence: number): 'high' | 'medium' | 'low' {
@@ -349,12 +375,14 @@ export async function createClinicImportSession(
   clinicId: string,
   userId: string,
   websiteUrl: string,
+  options?: { defaultCountry?: string | null },
 ) {
+  const canonicalUrl = normalizeKnowledgeImportUrlForStorage(websiteUrl)
   const { data: sessionRow, error: sessionError } = await supabase
     .from('clinic_import_sessions')
     .insert({
       clinic_id: clinicId,
-      website_url: websiteUrl,
+      website_url: canonicalUrl,
       status: 'draft',
       fetch_status: 'pending',
       created_by: userId,
@@ -367,35 +395,53 @@ export async function createClinicImportSession(
   }
 
   try {
-    const imported = await importWebsiteContent(websiteUrl)
-    const detectedFields = detectClinicImportFields(imported.content)
+    const imported = await importWebsiteContent(canonicalUrl)
+    const importedStorageUrl = normalizeKnowledgeImportUrlForStorage(imported.url)
+    const autofill = await extractWebsiteAutofill({
+      websiteUrl: importedStorageUrl,
+      title: imported.title,
+      text: imported.content,
+    })
+    const clinicProfilePolicy = buildClinicProfileUpdatePolicyFromAutofill(autofill, {
+      defaultCountry: options?.defaultCountry ?? null,
+    })
+    const skippedDetectedFieldTypes = new Set(
+      clinicProfilePolicy.skippedFields.filter((field): field is ImportFieldType => field === 'phone' || field === 'whatsapp'),
+    )
 
-    if (detectedFields.length > 0) {
-      const { error: insertFieldsError } = await supabase
+    const detectedFieldInputs = mapAutofillDetectedFields(autofill, importedStorageUrl).map((field) => ({
+      import_session_id: sessionRow.id,
+      field_type: field.field_type,
+      detected_value: field.detected_value,
+      source_url: field.source_url,
+      source_text_snippet: field.source_text_snippet,
+      confidence: field.confidence,
+      approved: !skippedDetectedFieldTypes.has(field.field_type),
+      approved_value: skippedDetectedFieldTypes.has(field.field_type) ? null : field.approved_value,
+    }))
+
+    let detectedFields: ClinicImportDetectedFieldRow[] = []
+    if (detectedFieldInputs.length > 0) {
+      const { data: insertedFields, error: insertFieldsError } = await supabase
         .from('clinic_import_detected_fields')
-        .insert(
-          detectedFields.map((field) => ({
-            import_session_id: sessionRow.id,
-            field_type: field.fieldType,
-            detected_value: field.value,
-            source_url: imported.url,
-            source_text_snippet: field.sourceSnippet,
-            confidence: field.confidence,
-          })),
-        )
+        .insert(detectedFieldInputs)
+        .select(fieldSelect)
 
       if (insertFieldsError) {
         throw insertFieldsError
       }
+
+      detectedFields = (insertedFields ?? []) as ClinicImportDetectedFieldRow[]
     }
 
     const { error: updateSessionError } = await supabase
       .from('clinic_import_sessions')
       .update({
-        website_url: imported.url,
-        status: 'draft',
+        website_url: importedStorageUrl,
+        status: 'reviewed',
         fetch_status: 'fetched',
         error_message: null,
+        reviewed_at: new Date().toISOString(),
       })
       .eq('id', sessionRow.id)
 
@@ -403,18 +449,63 @@ export async function createClinicImportSession(
       throw updateSessionError
     }
 
+    const clinicUpdate = clinicProfilePolicy.updateData
+    const widgetUpdate = buildWidgetSettingsFromAutofill(autofill)
+    const botUpdate = buildBotSettingsFromAutofill(autofill)
+    const settingsUpdate = Object.fromEntries(
+      buildClinicSettingsFromAutofill(autofill).map((row) => [row.key, row.value]),
+    )
+    const hoursPayload = buildClinicHoursFromAutofill(autofill)
+    const servicesPayload = buildServicePayloadsFromAutofill(autofill)
+
+    const { error: applyError } = await supabase.rpc('apply_website_autofill', {
+      p_session_id: sessionRow.id,
+      p_approvals: detectedFields.map((field) => ({
+        field_id: field.id,
+        approved: !skippedDetectedFieldTypes.has(field.field_type),
+        approved_value: skippedDetectedFieldTypes.has(field.field_type)
+          ? null
+          : field.approved_value ?? field.detected_value,
+      })),
+      p_clinic_update: clinicUpdate,
+      p_widget_update: widgetUpdate,
+      p_bot_update: botUpdate,
+      p_settings_update: settingsUpdate,
+      p_hours: hoursPayload,
+      p_services: servicesPayload,
+      p_error_message: null,
+    })
+
+    if (applyError) {
+      throw applyError
+    }
+
     const session = await getClinicImportSession(supabase, clinicId, sessionRow.id)
     if (!session) {
       throw new Error('Import session could not be loaded after creation.')
     }
 
+    const refreshed = await getCurrentClinicSnapshot(supabase, { id: userId })
+    if (!refreshed.clinic) {
+      throw new Error('Clinic could not be loaded after autofill approval.')
+    }
+
     return {
+      clinic: mapClinicToAppProfile(refreshed.clinic, refreshed.hours),
       session,
-      importedTitle: imported.title,
-      contentPreview: imported.content.substring(0, 500),
+      importedTitle: autofill.knowledge.title || imported.title,
+      contentPreview: autofill.knowledge.summary || imported.content.substring(0, 500),
+      warnings: [
+        ...autofill.flags.reasons,
+        ...clinicProfilePolicy.warnings,
+        ...(widgetUpdate.allowed_domains.length === 0
+          ? ['Skipped widget allowed domains because the imported website did not expose a secure https origin.']
+          : []),
+      ],
+      autoApplied: true,
     }
   } catch (error) {
-    await supabase
+    const { error: statusUpdateError } = await supabase
       .from('clinic_import_sessions')
       .update({
         status: 'failed',
@@ -422,6 +513,14 @@ export async function createClinicImportSession(
         error_message: error instanceof Error ? error.message : 'Website import failed.',
       })
       .eq('id', sessionRow.id)
+
+    if (statusUpdateError) {
+      console.error('[clinic-imports] Failed to update import session status to failed', {
+        sessionId: sessionRow.id,
+        originalError: error instanceof Error ? error.message : String(error),
+        statusUpdateError: statusUpdateError.message,
+      })
+    }
 
     throw error
   }

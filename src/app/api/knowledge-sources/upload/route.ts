@@ -96,12 +96,20 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-upload-finalize' }).catch(() => {}))
+    after(() => processQueuedKnowledgeJobs({ limit: 1, runner: 'api-upload-finalize' }).catch((bgError) => {
+      console.error('[knowledge-sources:upload] Background job processing failed', {
+        runner: 'api-upload-finalize',
+        error: bgError instanceof Error ? bgError.message : String(bgError),
+      })
+    }))
 
     const refreshed = await getKnowledgeSourceForClinic(supabase, current.clinic.id, source.id)
     return NextResponse.json(refreshed ? mapKnowledgeSource(refreshed) : null, { status: 202 })
   } catch (error) {
-    console.error('Error finalizing knowledge upload:', error)
+    console.error('[knowledge-sources:upload] Failed to finalize knowledge upload', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to finalize file upload' },
       { status: 500 },

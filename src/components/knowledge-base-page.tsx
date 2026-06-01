@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Upload as TusUpload } from 'tus-js-client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -70,10 +71,10 @@ import {
   ClockIcon,
   CreditCard,
   Stethoscope,
-  ArrowRight,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 
 // --- Types ---
 
@@ -103,11 +104,23 @@ interface DetectedDetail {
   confidence: 'high' | 'medium' | 'low'
 }
 
+interface KnowledgeJobProgress {
+  id: string
+  sourceId: string | null
+  jobType: 'process_source_content' | 'import_website_source' | 'process_file_source' | 'import_sitemap'
+  status: 'queued' | 'processing' | 'completed' | 'failed'
+  totalPages: number
+  processedPages: number
+  failedPages: number
+  currentPageUrl: string | null
+  progressUpdatedAt: string | null
+}
+
 // --- Config ---
 
 const statusConfig: Record<KnowledgeSource['status'], { label: string; className: string; icon: React.ComponentType<{ className?: string }> }> = {
   draft: { label: 'Draft', className: 'bg-slate-50 text-slate-700 border-slate-200', icon: Pencil },
-  queued: { label: 'Queued', className: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: Loader2 },
+  queued: { label: 'Optimizing', className: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: Loader2 },
   processing: { label: 'Processing', className: 'bg-amber-50 text-amber-700 border-amber-200', icon: Loader2 },
   trained: { label: 'Trained', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: CheckCircle2 },
   failed: { label: 'Failed', className: 'bg-red-50 text-red-700 border-red-200', icon: AlertCircle },
@@ -146,6 +159,7 @@ export default function KnowledgeBasePage() {
   const [importUrl, setImportUrl] = useState('')
   const [importType, setImportType] = useState<ImportType>('single')
   const [sitemapUrl, setSitemapUrl] = useState('')
+  const [activeImportJob, setActiveImportJob] = useState<KnowledgeJobProgress | null>(null)
 
   // File upload dialog
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
@@ -164,18 +178,28 @@ export default function KnowledgeBasePage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteSource, setDeleteSource] = useState<KnowledgeSource | null>(null)
 
+  // Track whether the first successful load has completed.
+  // Used to keep existing data visible during background re-fetches
+  // (tab focus, polling, post-mutation refresh) instead of flashing skeletons.
+  const hasLoadedRef = useRef(false)
+
   // --- Data fetching ---
 
   const fetchSources = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter !== 'all') params.set('status', statusFilter)
       const res = await fetch(`/api/knowledge-sources?${params.toString()}`)
       if (!res.ok) throw new Error('Failed to fetch sources')
       const data = await res.json()
-      setSources(Array.isArray(data) ? data : [])
-    } catch {
+      const sourceList = Array.isArray(data) ? data : Array.isArray(data.sources) ? data.sources : []
+      setSources(sourceList)
+      hasLoadedRef.current = true
+    } catch (error) {
+      console.error('[KnowledgeBasePage] Failed to fetch sources', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to load knowledge base')
     } finally {
       setLoading(false)
@@ -200,6 +224,55 @@ export default function KnowledgeBasePage() {
 
     return () => window.clearInterval(interval)
   }, [fetchSources, sources])
+
+  const fetchImportJobProgress = useCallback(async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/knowledge-jobs/${jobId}`)
+      if (!res.ok) return
+
+      const data = await res.json()
+      const job = data?.job as KnowledgeJobProgress | undefined
+      if (!job?.id) return
+
+      setActiveImportJob((current) => {
+        if (!current || current.id !== job.id) return current
+        return {
+          ...current,
+          ...job,
+        }
+      })
+
+      if (job.status === 'completed' || job.status === 'failed') {
+        setActiveImportJob((current) => (current?.id === job.id ? null : current))
+        fetchSources()
+      }
+    } catch {
+      // Ignore transient polling failures.
+    }
+  }, [fetchSources])
+
+  useEffect(() => {
+    if (!activeImportJob?.id || !['queued', 'processing'].includes(activeImportJob.status)) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      void fetchImportJobProgress(activeImportJob.id)
+    }, 0)
+    const interval = window.setInterval(() => {
+      void fetchImportJobProgress(activeImportJob.id)
+    }, 2000)
+
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [activeImportJob?.id, activeImportJob?.status, fetchImportJobProgress])
+
+  // Re-fetch when user switches back to this tab.
+  // Disabled while any dialog is open to avoid overwriting form state.
+  const anyDialogOpen = dialogOpen || websiteDialogOpen || uploadDialogOpen || previewDialogOpen || detectionDialogOpen || deleteDialogOpen
+  useRefetchOnFocus(fetchSources, !anyDialogOpen)
 
   const filteredSources = useMemo(
     () =>
@@ -233,10 +306,6 @@ export default function KnowledgeBasePage() {
     } catch {
       return 'Please enter a valid website URL.'
     }
-    const existing = sources.find(
-      (s) => s.type === 'website' && s.sourceUrl?.replace(/\/+$/, '') === normalized.replace(/\/+$/, '')
-    )
-    if (existing) return 'This link has already been added.'
     return null
   }
 
@@ -267,12 +336,15 @@ export default function KnowledgeBasePage() {
         body: JSON.stringify(form),
       })
       if (!res.ok) throw new Error('Failed to save')
-      toast.success(editingSource ? 'Knowledge update queued' : 'Knowledge source queued for training')
+      toast.success(editingSource ? 'Knowledge update queued for processing' : 'Knowledge source queued for processing')
       setDialogOpen(false)
       setForm(emptyForm)
       setEditingSource(null)
       fetchSources()
-    } catch {
+    } catch (error) {
+      console.error('[KnowledgeBasePage] Failed to save knowledge source', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to save knowledge source')
     } finally {
       setSubmitting(false)
@@ -303,56 +375,54 @@ export default function KnowledgeBasePage() {
           throw new Error(errData.error || 'Failed to import sitemap')
         }
         const data = await res.json()
-        toast.success(data.message || 'Sitemap import queued')
+        const job = data?.job as KnowledgeJobProgress | undefined
+        if (job?.id) {
+          setActiveImportJob({ ...job })
+        }
+        toast.success(data.message || 'Sitemap import queued for AI optimization')
         setWebsiteDialogOpen(false)
         setSitemapUrl('')
         setImportUrl('')
         fetchSources()
       } catch (err) {
+        console.error('[KnowledgeBasePage] Sitemap import failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
         toast.error(err instanceof Error ? err.message : 'Failed to import sitemap')
       } finally {
         setSubmitting(false)
       }
     } else {
-      // Single page or homepage crawl
+      const websiteImportMode = importType === 'homepage' ? 'homepage' : 'website'
+
       try {
         const res = await fetch('/api/knowledge-sources/import-website', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: importUrl.trim() }),
+          body: JSON.stringify({
+            url: importUrl.trim(),
+            importMode: websiteImportMode,
+          }),
         })
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}))
           throw new Error(errData.error || 'Failed to import website')
         }
 
-        const imported = await res.json()
-        toast.success(importType === 'homepage' ? 'Homepage import queued' : 'Website page import queued')
-
-        // Auto-detect details after successful import
-        if (imported?.id) {
-          try {
-            const detRes = await fetch('/api/knowledge-sources/detect-details', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sourceId: imported.id }),
-            })
-            if (detRes.ok) {
-              const detData = await detRes.json()
-              if (detData.details && detData.details.length > 0) {
-                setDetectedDetails(detData.details)
-                setDetectionDialogOpen(true)
-              }
-            }
-          } catch {
-            // Detection failure is non-blocking
-          }
+        const data = await res.json()
+        const job = data?.job as KnowledgeJobProgress | undefined
+        if (job?.id) {
+          setActiveImportJob({ ...job })
         }
+        toast.success(data.message || (importType === 'homepage' ? 'Homepage crawl queued for AI optimization' : 'Website page import queued for AI optimization'))
 
         setWebsiteDialogOpen(false)
         setImportUrl('')
         fetchSources()
       } catch (err) {
+        console.error('[KnowledgeBasePage] Website import failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
         toast.error(err instanceof Error ? err.message : 'Could not import this page. Please check the URL or try again.')
       } finally {
         setSubmitting(false)
@@ -476,6 +546,9 @@ export default function KnowledgeBasePage() {
       setSelectedFile(null)
       fetchSources()
     } catch (error) {
+      console.error('[KnowledgeBasePage] File upload failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error(error instanceof Error ? error.message : 'Failed to upload file')
     } finally {
       setSubmitting(false)
@@ -490,9 +563,12 @@ export default function KnowledgeBasePage() {
       const res = await fetch('/api/knowledge-sources/refresh', { method: 'POST' })
       if (!res.ok) throw new Error('Failed to refresh sources')
       const data = await res.json()
-      toast.success(`Queued ${data.queued ?? data.refreshed}/${data.total} sources for refresh`)
+      toast.success(`Queued ${data.queued ?? data.refreshed}/${data.total} sources for processing`)
       fetchSources()
-    } catch {
+    } catch (error) {
+      console.error('[KnowledgeBasePage] Refresh all failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to refresh sources')
     } finally {
       setSubmitting(false)
@@ -507,9 +583,13 @@ export default function KnowledgeBasePage() {
         body: JSON.stringify({ refresh: source.type === 'website', retrain: source.type !== 'website' }),
       })
       if (!res.ok) throw new Error('Failed to refresh source')
-      toast.success(source.type === 'website' ? 'Website refresh queued' : 'Knowledge retraining queued')
+      toast.success(source.type === 'website' ? 'Website refresh queued for processing' : 'Knowledge retraining queued for processing')
       fetchSources()
-    } catch {
+    } catch (error) {
+      console.error('[KnowledgeBasePage] Source refresh failed', {
+        sourceId: source.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error('Failed to refresh source')
     }
   }
@@ -525,7 +605,11 @@ export default function KnowledgeBasePage() {
     if (!deleteSource) return
     try {
       const res = await fetch(`/api/knowledge-sources/${deleteSource.id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete')
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null)
+        const serverMessage = errorData?.error || 'Failed to delete'
+        throw new Error(serverMessage)
+      }
       toast.success('Knowledge source deleted')
       setDeleteDialogOpen(false)
       if (previewDialogOpen && previewSource?.id === deleteSource.id) {
@@ -534,8 +618,12 @@ export default function KnowledgeBasePage() {
       }
       setDeleteSource(null)
       fetchSources()
-    } catch {
-      toast.error('Failed to delete knowledge source')
+    } catch (err) {
+      console.error('[KnowledgeBasePage] Delete failed', {
+        sourceId: deleteSource?.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      toast.error(err instanceof Error ? err.message : 'Failed to delete knowledge source')
     }
   }
 
@@ -558,7 +646,11 @@ export default function KnowledgeBasePage() {
           const data = await res.json()
           setDetectedDetails(data.details || [])
         }
-      } catch {
+      } catch (error) {
+        console.error('[KnowledgeBasePage] Detail detection failed', {
+          sourceId: source.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
         setDetectedDetails([])
       } finally {
         setDetecting(false)
@@ -680,7 +772,7 @@ export default function KnowledgeBasePage() {
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="draft">Draft</SelectItem>
-            <SelectItem value="queued">Queued</SelectItem>
+            <SelectItem value="queued">Optimizing</SelectItem>
             <SelectItem value="trained">Trained</SelectItem>
             <SelectItem value="processing">Processing</SelectItem>
             <SelectItem value="failed">Failed</SelectItem>
@@ -793,14 +885,12 @@ export default function KnowledgeBasePage() {
                           )}
                           <DropdownMenuItem onClick={() => handleRefresh(source)}>
                             <RefreshCw className="mr-2 size-4" />
-                            {source.type === 'website' ? 'Refresh' : 'Retrain'}
+                            {source.type === 'website'
+                              ? source.status === 'failed'
+                                ? 'Retry Import'
+                                : 'Refresh'
+                              : 'Retrain'}
                           </DropdownMenuItem>
-                          {source.status === 'failed' && source.type === 'website' && (
-                            <DropdownMenuItem onClick={() => handleRefresh(source)}>
-                              <RefreshCw className="mr-2 size-4" />
-                              Retry Import
-                            </DropdownMenuItem>
-                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-red-600 focus:text-red-700" onClick={() => confirmDelete(source)}>
                             <Trash2 className="mr-2 size-4" />
@@ -896,8 +986,8 @@ export default function KnowledgeBasePage() {
                 <div className="flex items-start space-x-2">
                   <RadioGroupItem value="homepage" id="r-homepage" />
                   <Label htmlFor="r-homepage" className="font-normal cursor-pointer">
-                    <span className="font-medium">Website homepage</span>
-                    <span className="block text-xs text-muted-foreground">Import the homepage (up to 5 pages crawl coming soon)</span>
+                    <span className="font-medium">Homepage crawl</span>
+                    <span className="block text-xs text-muted-foreground">Crawl the homepage and up to 4 same-site pages</span>
                   </Label>
                 </div>
                 <div className="flex items-start space-x-2">
@@ -930,11 +1020,6 @@ export default function KnowledgeBasePage() {
               </div>
             )}
 
-            {importType === 'homepage' && (
-              <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-                Full website crawling (up to 5 pages) is coming soon. For now, only the homepage content will be imported.
-              </div>
-            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setWebsiteDialogOpen(false)}>Cancel</Button>
@@ -960,8 +1045,8 @@ export default function KnowledgeBasePage() {
           </DialogHeader>
           <div className="space-y-2">
             <Label>Supported files</Label>
-            <Input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
-            <p className="text-xs text-muted-foreground">Max file size 10 MB. Supported: PDF, DOC, DOCX.</p>
+            <Input type="file" accept=".pdf,.docx" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
+            <p className="text-xs text-muted-foreground">Max file size 10 MB. Supported: PDF, DOCX.</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setUploadDialogOpen(false)}>Cancel</Button>
@@ -1086,7 +1171,7 @@ export default function KnowledgeBasePage() {
           <DialogHeader>
             <DialogTitle>Detected From Your Website</DialogTitle>
             <DialogDescription>
-              We found these details on your website. You can apply them to your Bot Setup.
+              We found these details on your website. Review them and update Bot Setup manually if needed.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1105,16 +1190,8 @@ export default function KnowledgeBasePage() {
             })}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setDetectionDialogOpen(false)}>Ignore</Button>
-            <Button
-              className="bg-emerald-600 hover:bg-emerald-700"
-              onClick={() => {
-                setDetectionDialogOpen(false)
-                toast.success('Details applied to Bot Setup (demo)')
-              }}
-            >
-              Apply to Bot Setup
-              <ArrowRight className="ml-1 size-4" />
+            <Button variant="outline" onClick={() => setDetectionDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1126,7 +1203,7 @@ export default function KnowledgeBasePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete knowledge source?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove <strong>{deleteSource?.title}</strong> from your chatbot knowledge.
+              This will permanently delete <strong>{deleteSource?.title}</strong> and all its trained data.
               The chatbot will no longer use this content when answering patients.
               This action cannot be undone.
             </AlertDialogDescription>

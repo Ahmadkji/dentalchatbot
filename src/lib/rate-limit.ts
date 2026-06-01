@@ -98,3 +98,13 @@ export function widgetEventsKey(visitorId: string): { key: string; limit: number
 export function widgetAppointmentKey(visitorId: string, ip: string): { key: string; limit: number; windowMs: number } {
   return { key: `widget-appt:${visitorId}:${ip}`, limit: 5, windowMs: 60_000 }
 }
+
+/** Forgot-password email cooldown: 1 per email per 60 seconds. */
+export function forgotPasswordCooldownKey(email: string): { key: string; limit: number; windowMs: number } {
+  return { key: `forgot-cooldown:${email.trim().toLowerCase()}`, limit: 1, windowMs: 60_000 }
+}
+
+/** Confirmation resend cooldown: 1 per email per 60 seconds. */
+export function confirmationCooldownKey(email: string): { key: string; limit: number; windowMs: number } {
+  return { key: `confirm-cooldown:${email.trim().toLowerCase()}`, limit: 1, windowMs: 60_000 }
+}

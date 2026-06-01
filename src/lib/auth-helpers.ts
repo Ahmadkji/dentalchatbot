@@ -29,6 +29,11 @@ export async function requireAuth() {
   const { data: { user }, error } = await supabase.auth.getUser()
 
   if (error || !user) {
+    console.warn('[auth:requireAuth] Authentication failed', {
+      hasError: Boolean(error),
+      errorMessage: error?.message ?? 'No user returned',
+      errorCode: error?.status ?? null,
+    })
     return {
       user: null as null,
       supabase,

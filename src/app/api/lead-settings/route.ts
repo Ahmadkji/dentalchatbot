@@ -3,10 +3,10 @@ import { requireAuth } from '@/lib/auth-helpers'
 import { getCurrentClinic } from '@/lib/clinics/current'
 import {
   type ClinicSettingKey,
+  CLINIC_SETTING_DEFAULTS,
   listClinicSettings,
   mapLeadSettings,
   normalizeLeadSettingsInput,
-  updateClinicSetting,
 } from '@/lib/clinics/settings'
 
 export async function GET() {
@@ -23,7 +23,10 @@ export async function GET() {
     const allSettings = await listClinicSettings(supabase, clinic.id)
     return NextResponse.json({ settings: mapLeadSettings(allSettings) })
   } catch (error) {
-    console.error('Error fetching lead settings:', error)
+    console.error('[lead-settings:GET] Failed to fetch lead settings', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: 'Failed to fetch lead settings' },
       { status: 500 },
@@ -60,17 +63,49 @@ export async function PUT(request: NextRequest) {
     }
 
     const normalized = normalizeLeadSettingsInput(settings)
+    if (Object.keys(normalized).length === 0) {
+      return NextResponse.json(
+        { error: 'No valid lead settings were provided.' },
+        { status: 400 },
+      )
+    }
 
-    await Promise.all(
-      Object.entries(normalized).map(([key, value]) =>
-        updateClinicSetting(supabase, clinicId, key as ClinicSettingKey, value),
-      ),
-    )
+    // Batch upsert all settings in a single DB call instead of N individual writes.
+    // This reduces the number of Supabase round-trips from (N writes + 1 read)
+    // to (1 write + 1 read), cutting latency significantly when multiple settings change.
+    // Include category/description so the INSERT path (for legacy clinics missing rows)
+    // doesn't fail on the NOT NULL category constraint.
+    const defaultsMap = new Map(CLINIC_SETTING_DEFAULTS.map((d) => [d.key, d]))
+    const rows = Object.entries(normalized).map(([key, value]) => {
+      const def = defaultsMap.get(key as ClinicSettingKey)
+      return {
+        clinic_id: clinicId,
+        key,
+        value: value as string,
+        category: def?.category ?? 'lead-collection',
+        description: def?.description ?? '',
+      }
+    })
+    const { error: upsertError } = await supabase
+      .from('clinic_settings')
+      .upsert(rows, { onConflict: 'clinic_id,key' })
+
+    if (upsertError) {
+      console.error('[lead-settings:PUT] Batch upsert failed', {
+        userId: user.id,
+        clinicId,
+        error: upsertError instanceof Error ? upsertError.message : String(upsertError),
+      })
+      return NextResponse.json({ error: 'Failed to update lead settings' }, { status: 500 })
+    }
 
     const refreshed = await listClinicSettings(supabase, clinicId)
     return NextResponse.json({ success: true, settings: mapLeadSettings(refreshed) })
   } catch (error) {
-    console.error('Error updating lead settings:', error)
+    console.error('[lead-settings:PATCH] Failed to update lead settings', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: 'Failed to update lead settings' },
       { status: 500 },

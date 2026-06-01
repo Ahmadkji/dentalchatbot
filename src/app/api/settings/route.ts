@@ -36,7 +36,10 @@ export async function GET() {
       grouped,
     })
   } catch (error) {
-    console.error('Error fetching settings:', error)
+    console.error('[settings:GET] Failed to fetch settings', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: 'Failed to fetch settings' },
       { status: 500 },
@@ -95,7 +98,10 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json(setting)
   } catch (error) {
-    console.error('Error updating setting:', error)
+    console.error('[settings:PATCH] Failed to update setting', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json(
       { error: 'Failed to update setting' },
       { status: 500 },

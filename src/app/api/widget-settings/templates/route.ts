@@ -88,7 +88,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(updated)
   } catch (error) {
-    console.error('Error applying widget template:', error)
+    console.error('[widget-templates:POST] Failed to apply widget template', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to apply widget template' }, { status: 500 })
   }
 }

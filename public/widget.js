@@ -3,11 +3,43 @@
   window.__clinicWidgetLoaded = true;
 
   var script = document.currentScript;
-  if (!script) return;
+  if (!script) {
+    console.error('[clinic-widget] Widget script loaded without document.currentScript. The embed cannot bootstrap.');
+    return;
+  }
 
   var clinicSlug = script.getAttribute('data-clinic-slug') || '';
   var oldClinicId = script.getAttribute('data-clinic-id') || ''; // Legacy support
   var origin = new URL(script.src, window.location.href).origin;
+  var widgetContext = {
+    clinicSlug: clinicSlug || null,
+    hostOrigin: window.location.origin,
+    pageUrl: window.location.href,
+    scriptSrc: script.src,
+  };
+
+  function logWidget(level, message, details) {
+    var logger = console[level] || console.log;
+    try {
+      logger.call(console, '[clinic-widget] ' + message, details || widgetContext);
+    } catch (error) {
+      console.log('[clinic-widget] ' + message, details || widgetContext);
+    }
+  }
+
+  function logWidgetError(message, error, details) {
+    var payload = details ? Object.assign({}, widgetContext, details) : Object.assign({}, widgetContext);
+    if (error instanceof Error) {
+      payload.errorName = error.name;
+      payload.errorMessage = error.message;
+      if (error.stack) payload.stack = error.stack;
+      if (error.status !== undefined) payload.status = error.status;
+      if (error.responseBody !== undefined) payload.responseBody = error.responseBody;
+    } else if (error !== undefined && error !== null) {
+      payload.error = error;
+    }
+    logWidget('error', message, payload);
+  }
 
   // ── Legacy embed warning ────────────────────────────────────────
   // If only the old data-clinic-id attribute is present (no data-clinic-slug),
@@ -21,7 +53,12 @@
     return;
   }
 
-  if (!clinicSlug) return;
+  if (!clinicSlug) {
+    logWidgetError('Widget script missing data-clinic-slug. The embed code is incomplete.', new Error('Missing clinic slug'));
+    return;
+  }
+
+  logWidget('info', 'Widget bootstrap started.', widgetContext);
 
   var storageKey = 'clinic_widget_auto_open_seen_' + clinicSlug;
   var sessionKey = 'clinic_widget_session_v2_' + clinicSlug;
@@ -45,6 +82,7 @@
       window.localStorage.setItem(visitorIdKey, visitorId);
     }
   } catch (e) {
+    logWidgetError('localStorage unavailable while creating visitor ID. Falling back to memory-only visitor state.', e);
     visitorId = createVisitorId();
   }
 
@@ -122,14 +160,10 @@
   launcher.style.boxShadow = '0 14px 30px rgba(2, 6, 23, 0.26)';
   launcher.style.transition = 'transform 180ms ease, box-shadow 180ms ease';
   launcher.style.zIndex = '2147483000';
-  launcher.style.font = '600 12px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
   launcher.innerHTML =
-    '<span style="display:inline-flex;align-items:center;gap:6px">' +
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display:block">' +
-    '<path d="M12 3C7.03 3 3 6.7 3 11.27c0 2.62 1.33 4.95 3.42 6.47V21l3.08-1.72c.49.1 1 .15 1.5.15 4.97 0 9-3.7 9-8.26S16.97 3 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
-    '</svg>' +
-    '<span style="font-size:11px;letter-spacing:.02em">Chat</span>' +
-    '</span>';
+    '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display:block">' +
+    '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '</svg>';
 
   var iframe = document.createElement('iframe');
   iframe.src = iframeSrc;
@@ -147,6 +181,18 @@
   iframe.style.pointerEvents = 'none';
   iframe.style.transition = 'opacity 180ms ease, transform 180ms ease';
   iframe.style.zIndex = '2147483000';
+  iframe.addEventListener('load', function () {
+    logWidget('info', 'Widget iframe loaded.', {
+      clinicSlug: clinicSlug,
+      iframeSrc: iframe.src,
+    });
+  });
+  iframe.addEventListener('error', function () {
+    logWidgetError('Widget iframe failed to load.', new Error('Iframe load error'), {
+      clinicSlug: clinicSlug,
+      iframeSrc: iframe.src,
+    });
+  });
 
   var tooltip = document.createElement('button');
   tooltip.type = 'button';
@@ -259,11 +305,34 @@
 
   window.addEventListener('message', function (event) {
     // Security: verify origin and source
-    if (event.origin !== origin) return;
-    if (!iframe.contentWindow || event.source !== iframe.contentWindow) return;
-    if (!event.data || typeof event.data.type !== 'string') return;
+    if (event.origin !== origin) {
+      if (event.data && typeof event.data.type === 'string' && event.data.type.indexOf('clinic_widget:') === 0) {
+        logWidgetError('Ignored widget message from unexpected origin.', new Error('Origin mismatch'), {
+          eventOrigin: event.origin,
+          expectedOrigin: origin,
+          messageType: event.data.type,
+        });
+      }
+      return;
+    }
+    if (!iframe.contentWindow || event.source !== iframe.contentWindow) {
+      if (event.data && typeof event.data.type === 'string' && event.data.type.indexOf('clinic_widget:') === 0) {
+        logWidgetError('Ignored widget message from unexpected source window.', new Error('Source mismatch'), {
+          eventOrigin: event.origin,
+          messageType: event.data.type,
+        });
+      }
+      return;
+    }
+    if (!event.data || typeof event.data.type !== 'string') {
+      logWidgetError('Received widget message without a valid type.', new Error('Invalid widget message payload'), {
+        eventOrigin: event.origin,
+      });
+      return;
+    }
 
     if (event.data.type === 'clinic_widget:ready') {
+      logWidget('info', 'Widget iframe reported ready.', { clinicSlug: clinicSlug });
       // Iframe is ready — hydrate it with stored session
       var session = readSession();
       iframe.contentWindow.postMessage({
@@ -282,7 +351,12 @@
 
     if (event.data.type === 'clinic_widget:state_updated') {
       var payload = event.data.payload;
-      if (!payload || !payload.conversationId || !payload.publicSessionToken) return;
+      if (!payload || !payload.conversationId || !payload.publicSessionToken) {
+        logWidgetError('Widget state update payload was missing conversation data.', new Error('Invalid state_updated payload'), {
+          messageType: event.data.type,
+        });
+        return;
+      }
 
       // Only store if newer than current
       var current = readSession();
@@ -301,6 +375,7 @@
     }
 
     if (event.data.type === 'clinic_widget:start_new_session') {
+      logWidget('info', 'Widget requested a new session.', { clinicSlug: clinicSlug });
       clearSession();
       iframe.contentWindow.postMessage({
         type: 'clinic_widget:clear_session',
@@ -309,7 +384,20 @@
       return;
     }
 
+    // ── Inline token refresh: iframe received a fresh token from API ──
+    if (event.data.type === 'clinic_widget:access_token_refreshed') {
+      var newToken = event.data.payload && event.data.payload.widgetAccessToken;
+      if (newToken) {
+        logWidget('info', 'Widget access token refreshed inline.', { clinicSlug: clinicSlug });
+        widgetAccessToken = newToken;
+      } else {
+        logWidgetError('Widget access token refresh event did not include a token.', new Error('Missing refreshed token'));
+      }
+      return;
+    }
+
     if (event.data.type === 'clinic_widget:close_requested') {
+      logWidget('info', 'Widget iframe requested close.', { clinicSlug: clinicSlug });
       setOpen(false);
       logWidgetEvent('widget_closed', { source: 'iframe_header' });
       return;
@@ -317,13 +405,25 @@
 
     // ── Token refresh: iframe reports token expired ──────────────
     if (event.data.type === 'clinic_widget:token_expired') {
+      logWidget('info', 'Widget token expired; refreshing bootstrap config.', { clinicSlug: clinicSlug });
       // Re-bootstrap: fetch fresh config with a new token
       fetch(origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug))
         .then(function (response) {
-          if (!response.ok) return Promise.reject(new Error('Refresh failed: ' + response.status));
+          if (!response.ok) {
+            return response.text().then(function (body) {
+              var error = new Error('Refresh failed: ' + response.status);
+              error.status = response.status;
+              error.responseBody = body;
+              throw error;
+            });
+          }
           return response.json();
         })
         .then(function (config) {
+          logWidget('info', 'Widget config refresh succeeded.', {
+            clinicSlug: clinicSlug,
+            widgetPosition: config.widgetPosition,
+          });
           widgetAccessToken = config.widgetAccessToken || '';
           widgetConfig = config;
           // Send the fresh token back to the iframe
@@ -338,7 +438,7 @@
           }
         })
         .catch(function (err) {
-          console.error('[clinic-widget] Token refresh failed:', err);
+          logWidgetError('Token refresh failed.', err, { clinicSlug: clinicSlug });
           // Tell iframe the refresh failed so it can show an error
           if (iframe.contentWindow) {
             iframe.contentWindow.postMessage({
@@ -353,17 +453,38 @@
 
   // ── Config bootstrap: fetch public config, then set up UI ──────
 
+  logWidget('info', 'Fetching widget config.', {
+    clinicSlug: clinicSlug,
+    configUrl: origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug),
+  });
+
   fetch(origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug))
     .then(function (response) {
-      if (!response.ok) return Promise.reject(new Error('Config fetch failed: ' + response.status));
+      if (!response.ok) {
+        return response.text().then(function (body) {
+          var error = new Error('Config fetch failed: ' + response.status);
+          error.status = response.status;
+          error.responseBody = body;
+          throw error;
+        });
+      }
       return response.json();
     })
     .then(function (config) {
+      logWidget('info', 'Widget config loaded successfully.', {
+        clinicSlug: clinicSlug,
+        widgetPosition: config.widgetPosition,
+        quickPromptCount: Array.isArray(config.quickPrompts) ? config.quickPrompts.length : 0,
+      });
       widgetAccessToken = config.widgetAccessToken || '';
       widgetConfig = config;
-      iframeSrc = origin + '/widget-frame?clinicSlug=' + encodeURIComponent(clinicSlug) + '&mode=embedded&handoff=1';
+      iframeSrc = origin + '/widget-frame?clinicSlug=' + encodeURIComponent(clinicSlug) + '&mode=embedded&handoff=1&sourcePage=' + encodeURIComponent(window.location.origin + window.location.pathname);
       iframe.src = iframeSrc;
       // Only add DOM elements after successful bootstrap
+      logWidget('info', 'Appending widget DOM elements after successful bootstrap.', {
+        clinicSlug: clinicSlug,
+        iframeSrc: iframeSrc,
+      });
       document.body.appendChild(launcher);
       document.body.appendChild(iframe);
       document.body.appendChild(tooltip);
@@ -371,7 +492,10 @@
       logWidgetEvent('widget_loaded', { source: 'bootstrap' });
     })
     .catch(function (err) {
-      console.error('[clinic-widget] Failed to load widget config:', err);
+      logWidgetError('Failed to load widget config.', err, {
+        clinicSlug: clinicSlug,
+        configUrl: origin + '/api/widget/config?slug=' + encodeURIComponent(clinicSlug),
+      });
       // Don't add any DOM — no launcher, no iframe, no tooltip.
       // The widget is simply not available for this clinic/domain.
     });

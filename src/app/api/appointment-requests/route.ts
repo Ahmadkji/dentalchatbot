@@ -40,7 +40,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(appointmentRequests)
   } catch (error) {
-    console.error('Error fetching appointment requests:', error)
+    console.error('[appointment-requests:GET] Failed to fetch appointment requests', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to fetch appointment requests' }, { status: 500 })
   }
 }
@@ -216,6 +219,19 @@ export async function POST(request: NextRequest) {
       }
 
       resolvedLeadId = lead.id
+    } else if (resolvedConversationId) {
+      const { data: latestLead } = await adminClient
+        .from('leads')
+        .select('id')
+        .eq('clinic_id', resolvedClinicId)
+        .eq('conversation_id', resolvedConversationId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (latestLead?.id) {
+        resolvedLeadId = latestLead.id
+      }
     }
 
     const { data: appointmentRequest, error } = await adminClient
@@ -239,7 +255,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error
 
     if (resolvedConversationId) {
-      await adminClient
+      const { error: convUpdateError } = await adminClient
         .from('conversations')
         .update({
           appointment_requested: true,
@@ -247,6 +263,14 @@ export async function POST(request: NextRequest) {
           visitor_name: String(name),
         })
         .eq('id', resolvedConversationId)
+
+      if (convUpdateError) {
+        console.error('[appointment-requests:POST] Failed to mark conversation', {
+          conversationId: resolvedConversationId,
+          error: convUpdateError.message,
+        })
+        // Don't fail the request — the appointment was created successfully
+      }
 
       // Extend token expiry on valid public activity
       if (isPublicPath) {
@@ -256,7 +280,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(appointmentRequest, { status: 201 })
   } catch (error) {
-    console.error('Error creating appointment request:', error)
+    console.error('[appointment-requests:POST] Failed to create appointment request', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     return NextResponse.json({ error: 'Failed to create appointment request' }, { status: 500 })
   }
 }

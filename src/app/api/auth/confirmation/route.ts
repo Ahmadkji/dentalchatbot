@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { assertSameOrigin, getClientIp } from '@/lib/security'
-import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
+import { consumeDistributedRateLimit, authEmailKey, authIpKey, confirmationCooldownKey } from '@/lib/rate-limit'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 import { mapConfirmationEmailError } from '@/lib/supabase/auth-errors'
 import { copyResponseCookies, setPrivateNoStore } from '@/lib/auth/response'
@@ -14,7 +14,12 @@ export async function POST(request: Request) {
 
   try {
     assertSameOrigin(request.headers.get('origin'), url)
-  } catch {
+  } catch (originError) {
+    console.error('[auth:confirmation] CSRF origin check failed', {
+      origin: request.headers.get('origin'),
+      host: url.host,
+      error: originError instanceof Error ? originError.message : String(originError),
+    })
     return buildResponse({ error: 'Forbidden' }, 403)
   }
 
@@ -48,7 +53,22 @@ export async function POST(request: Request) {
     return response
   }
 
-  const cookieResponse = NextResponse.next()
+  // Email cooldown: prevent duplicate emails from concurrent/double-click requests
+  const cooldownPreset = confirmationCooldownKey(email)
+  const cooldownResult = await consumeDistributedRateLimit(
+    cooldownPreset.key, cooldownPreset.limit, cooldownPreset.windowMs, 1, true
+  )
+  if (!cooldownResult.allowed) {
+    console.warn('[auth:confirmation] Email cooldown active', { email, resetAt: cooldownResult.resetAt })
+    const response = buildResponse(
+      { error: 'Please wait a moment before requesting another confirmation email.', resetAt: cooldownResult.resetAt },
+      429
+    )
+    response.headers.set('Retry-After', String(Math.ceil((cooldownResult.resetAt - Date.now()) / 1000)))
+    return response
+  }
+
+  const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
   if (!supabase) return buildResponse({ error: 'Auth configuration missing.' }, 500)
 
@@ -59,6 +79,10 @@ export async function POST(request: Request) {
   })
 
   if (error) {
+    console.error('[auth:confirmation] Email resend failed', {
+      error: error.message,
+      code: error.status ?? null,
+    })
     const mapped = mapConfirmationEmailError(error)
     return buildResponse({ error: mapped.message }, mapped.status)
   }
