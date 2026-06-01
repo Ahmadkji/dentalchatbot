@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     },
   })
 
-  listener.on(LICENSE_EVENT_TYPES, async (event) => {
+  listener.on([...LICENSE_EVENT_TYPES], async (event) => {
     await syncClinicFreemiusBillingByReference({
       licenseId: String(event.objects.license.id),
       userEmail: event.objects.user?.email ?? null,

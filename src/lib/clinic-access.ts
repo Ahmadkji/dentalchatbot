@@ -2,12 +2,23 @@ import 'server-only'
 
 import { NextResponse } from 'next/server'
 import type { User } from '@supabase/supabase-js'
-import { getCurrentClinic } from '@/lib/clinics/current'
+import {
+  getCurrentClinic,
+  type CurrentClinic,
+  type CurrentMembership,
+  type CurrentProfile,
+} from '@/lib/clinics/current'
 import type { createSupabaseRouteClient } from '@/lib/supabase/route-client'
 
 type SupabaseRouteClient = NonNullable<
   Awaited<ReturnType<typeof createSupabaseRouteClient>>
 >
+
+export type CurrentClinicAccess = {
+  profile: CurrentProfile
+  clinic: CurrentClinic
+  membership: CurrentMembership
+}
 
 export type ClinicRole = 'owner' | 'admin' | 'staff'
 
@@ -17,7 +28,7 @@ export async function requireCurrentClinicAccess(
   allowedRoles?: ClinicRole[],
 ): Promise<
   | {
-      current: Awaited<ReturnType<typeof getCurrentClinic>>
+      current: CurrentClinicAccess
       error: null
     }
   | {
@@ -27,7 +38,7 @@ export async function requireCurrentClinicAccess(
 > {
   const current = await getCurrentClinic(supabase, user)
 
-  if (!current.clinic || !current.membership) {
+  if (!current.profile || !current.clinic || !current.membership) {
     return {
       current: null,
       error: NextResponse.json({ error: 'Onboarding required' }, { status: 409 }),
@@ -47,5 +58,12 @@ export async function requireCurrentClinicAccess(
     }
   }
 
-  return { current, error: null }
+  return {
+    current: {
+      profile: current.profile,
+      clinic: current.clinic,
+      membership: current.membership,
+    },
+    error: null,
+  }
 }
