@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -25,24 +26,35 @@ type BillingFeatures = {
 }
 
 type BillingStatusResponse = {
+  provider: 'lemonsqueezy'
   clinicId: string
   membershipRole: 'owner' | 'admin' | 'staff' | null
   billing: {
     state: 'free' | 'pending' | 'trial' | 'active' | 'canceled' | 'expired'
+    providerStatus: string | null
     isActive: boolean
     features: BillingFeatures
-    pricingId: string | null
-    planId: string | null
-    expiration: string | null
+    variantId: string | null
+    productId: string | null
+    subscriptionId: string | null
+    customerId: string | null
+    renewsAt: string | null
+    endsAt: string | null
     trialEndsAt: string | null
     currency: string | null
-    amount: number | null
+    amountCents: number | null
     billingCycle: string | null
     isCanceled: boolean
+    testMode: boolean
+    customerPortalUrl: string | null
+    updatePaymentMethodUrl: string | null
+    lastEventType: string | null
+    lastEventId: string | null
     lastSyncedAt: string | null
   }
-  defaultPlanId: string | null
-  returnUrl: string
+  defaultVariantId: string | null
+  checkoutConfigured: boolean
+  testMode: boolean
   webhookUrl: string
   dashboardUrl: string
 }
@@ -68,6 +80,26 @@ function formatFeature(enabled: boolean) {
   return enabled ? 'Enabled' : 'Not included'
 }
 
+function formatMoney(amountCents: number | null, currency: string | null) {
+  if (amountCents === null || !currency) return null
+
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+  }).format(amountCents / 100)
+}
+
+function formatDate(value: string | null) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
 export default function BillingPage() {
   const [status, setStatus] = useState<BillingStatusResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -79,14 +111,17 @@ export default function BillingPage() {
   const loadStatus = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch('/api/billing/freemius/status', { cache: 'no-store' })
+      const response = await fetch('/api/billing/lemonsqueezy/status', { cache: 'no-store' })
       if (!response.ok) {
         throw new Error('Failed to load billing status')
       }
 
       const data = (await response.json()) as BillingStatusResponse
       setStatus(data)
-    } catch {
+    } catch (error) {
+      console.error('[billing-page] Failed to load billing status', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       setStatus(null)
       toast.error('Failed to load billing status')
     } finally {
@@ -94,9 +129,9 @@ export default function BillingPage() {
     }
   }, [])
 
-  const openCheckout = async (options?: { isSandbox?: boolean; trialMode?: 'free' | 'paid' | null }) => {
-    if (!status?.defaultPlanId) {
-      toast.error('Freemius plan is not configured yet.')
+  const openCheckout = async () => {
+    if (!status?.checkoutConfigured || !status.defaultVariantId) {
+      toast.error('Lemon Squeezy checkout is not configured yet.')
       return
     }
 
@@ -107,13 +142,11 @@ export default function BillingPage() {
 
     setCheckoutLoading(true)
     try {
-      const response = await fetch('/api/billing/freemius/checkout', {
+      const response = await fetch('/api/billing/lemonsqueezy/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          planId: status.defaultPlanId,
-          trialMode: options?.trialMode ?? null,
-          isSandbox: options?.isSandbox ?? false,
+          variantId: status.defaultVariantId,
         }),
       })
 
@@ -133,6 +166,9 @@ export default function BillingPage() {
 
       window.open(payload.url, '_blank', 'noopener,noreferrer')
     } catch (error) {
+      console.error('[billing-page] Failed to open checkout', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       toast.error(error instanceof Error ? error.message : 'Failed to open checkout')
     } finally {
       setCheckoutLoading(false)
@@ -140,8 +176,14 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    void loadStatus()
+    const timer = window.setTimeout(() => {
+      void loadStatus()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
   }, [loadStatus])
+
+  useRefetchOnFocus(loadStatus)
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -149,27 +191,34 @@ export default function BillingPage() {
     if (!billingParam) return
 
     if (billingParam === 'success') {
-      toast.success('Billing synced successfully')
+      toast.success('Checkout finished. Billing status will update after Lemon Squeezy sends the webhook.')
+      window.setTimeout(() => {
+        void loadStatus()
+      }, 0)
     } else if (billingParam === 'received') {
       toast('Payment received. Webhook sync is still finishing.')
     } else if (billingParam === 'invalid') {
-      toast.error('Freemius redirect validation failed')
+      toast.error('Checkout redirect was invalid.')
     } else if (billingParam === 'error') {
-      toast.error('Failed to process Freemius redirect')
+      toast.error('Failed to process checkout return')
     }
 
     searchParams.delete('billing')
     const nextSearch = searchParams.toString()
     const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
     window.history.replaceState({}, '', nextUrl)
-  }, [])
+  }, [loadStatus])
+
+  const formattedAmount = status ? formatMoney(status.billing.amountCents, status.billing.currency) : null
+  const renewsAt = status ? formatDate(status.billing.renewsAt) : null
+  const endsAt = status ? formatDate(status.billing.endsAt) : null
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold tracking-tight">Payments</h2>
         <p className="text-sm text-muted-foreground">
-          Manage plan status, checkout, and Freemius integration endpoints for this clinic.
+          Manage plan status, checkout, and Lemon Squeezy integration endpoints for this clinic.
         </p>
       </div>
 
@@ -198,14 +247,37 @@ export default function BillingPage() {
                 >
                   {formatState(status.billing.state)}
                 </Badge>
-                {status.billing.planId ? (
+                {status.billing.variantId ? (
                   <Badge variant="outline" className="border-slate-200 bg-white text-slate-700">
-                    Plan {status.billing.planId}
+                    Variant {status.billing.variantId}
+                  </Badge>
+                ) : null}
+                {status.testMode || status.billing.testMode ? (
+                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                    Test mode
                   </Badge>
                 ) : null}
                 <Badge variant="outline" className="border-slate-200 bg-white text-slate-700">
                   Role: {status.membershipRole ?? 'unknown'}
                 </Badge>
+              </div>
+              <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <p>
+                  <span className="font-medium text-slate-800">Provider status:</span>{' '}
+                  {status.billing.providerStatus ?? 'Not synced'}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-800">Amount:</span>{' '}
+                  {formattedAmount ?? 'Not available'}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-800">Renews:</span>{' '}
+                  {renewsAt ?? 'Not available'}
+                </p>
+                <p>
+                  <span className="font-medium text-slate-800">Ends:</span>{' '}
+                  {endsAt ?? 'Not scheduled'}
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -213,26 +285,17 @@ export default function BillingPage() {
                   type="button"
                   className="bg-emerald-600 text-white hover:bg-emerald-700"
                   onClick={() => void openCheckout()}
-                  disabled={!canStartCheckout || checkoutLoading || !status.defaultPlanId}
+                  disabled={!canStartCheckout || checkoutLoading || !status.checkoutConfigured}
                 >
-                  {checkoutLoading ? 'Opening...' : 'Open Production Checkout'}
+                  {checkoutLoading ? 'Opening...' : 'Open Checkout'}
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void openCheckout({ isSandbox: true })}
-                  disabled={!canStartCheckout || checkoutLoading || !status.defaultPlanId}
-                >
-                  Sandbox Checkout
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void openCheckout({ isSandbox: true, trialMode: 'paid' })}
-                  disabled={!canStartCheckout || checkoutLoading || !status.defaultPlanId}
-                >
-                  Sandbox Trial
-                </Button>
+                {status.billing.customerPortalUrl ? (
+                  <Button type="button" variant="outline" asChild>
+                    <a href={status.billing.customerPortalUrl} target="_blank" rel="noreferrer">
+                      Customer Portal
+                    </a>
+                  </Button>
+                ) : null}
               </div>
 
               {!canStartCheckout ? (
@@ -303,12 +366,13 @@ export default function BillingPage() {
 
       <Card className="border-slate-200">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-base">Freemius Endpoints</CardTitle>
-          <CardDescription>Use these exact URLs in your Freemius dashboard configuration.</CardDescription>
+          <CardTitle className="text-base">Lemon Squeezy Endpoints</CardTitle>
+          <CardDescription>Use these exact URLs in your Lemon Squeezy dashboard configuration.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          <p className="break-all"><span className="font-medium">Redirect URL:</span> {status?.returnUrl ?? 'Unavailable'}</p>
+          <p className="break-all"><span className="font-medium">Success Redirect URL:</span> {status ? `${status.dashboardUrl}?billing=success` : 'Unavailable'}</p>
           <p className="break-all"><span className="font-medium">Webhook URL:</span> {status?.webhookUrl ?? 'Unavailable'}</p>
+          <p className="break-all"><span className="font-medium">Default Variant ID:</span> {status?.defaultVariantId ?? 'Unavailable'}</p>
         </CardContent>
       </Card>
     </div>

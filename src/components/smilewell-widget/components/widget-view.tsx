@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { WidgetActionLinks } from '@/components/smilewell-widget/components/widget-action-links'
 import { WidgetChatPanel } from '@/components/smilewell-widget/components/widget-chat-panel'
@@ -64,20 +65,31 @@ export function WidgetView({
   chatEndRef,
   inputRef,
 }: WidgetViewProps) {
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640)
+    check()
+    window.addEventListener('resize', check, { passive: true })
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
   return (
     <div className={embedded ? 'flex flex-col h-screen' : 'fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3'}>
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.8, y: 20 }}
+            initial={{ opacity: 0, scale: isMobile ? 1 : 0.8, y: isMobile ? 0 : 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 20 }}
+            exit={{ opacity: 0, scale: isMobile ? 1 : 0.8, y: isMobile ? 0 : 20 }}
             transition={{ duration: 0.3, ease: [0.34, 1.56, 0.64, 1] }}
             style={{ transformOrigin: 'bottom right' }}
             className={
               embedded
                 ? 'w-full flex-1 min-h-0 bg-white flex flex-col overflow-hidden border border-gray-100'
-                : 'w-[380px] h-[520px] bg-white rounded-3xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden border border-gray-100'
+                : isMobile
+                  ? 'fixed inset-0 z-50 bg-white flex flex-col overflow-hidden'
+                  : 'w-[380px] h-[520px] bg-white rounded-3xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden border border-gray-100'
             }
           >
             <WidgetHeader

@@ -13,11 +13,16 @@ export async function GET(request: Request) {
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (!supabase) {
+    console.error('[auth:confirm] Auth configuration missing')
     const response = NextResponse.redirect(new URL('/login?error=auth-config-missing', url.origin))
     return setPrivateNoStore(response)
   }
 
   if (!tokenHash || !type) {
+    console.warn('[auth:confirm] Missing token_hash or type parameter', {
+      hasTokenHash: Boolean(tokenHash),
+      hasType: Boolean(type),
+    })
     const response = NextResponse.redirect(new URL('/login?error=verification_failed', url.origin))
     return setPrivateNoStore(response)
   }
@@ -28,6 +33,11 @@ export async function GET(request: Request) {
   })
 
   if (error) {
+    console.error('[auth:confirm] OTP verification failed', {
+      type,
+      error: error.message,
+      code: error.status ?? null,
+    })
     const response = NextResponse.redirect(new URL('/login?error=verification_failed', url.origin))
     return copyResponseCookies(cookieResponse, setPrivateNoStore(response))
   }

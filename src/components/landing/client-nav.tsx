@@ -32,7 +32,7 @@ export function ClientNav() {
             <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
               <Stethoscope className="w-4 h-4 text-white" />
             </div>
-            <span className="font-bold text-slate-900">DentalGPT Studio</span>
+            <span className="font-bold text-slate-900 hidden sm:inline">DentalGPT Studio</span>
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/login" className="text-sm text-slate-600 hover:text-slate-900 font-medium">

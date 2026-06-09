@@ -76,7 +76,7 @@ function Receipt() {
           backgroundSize: "12px 100%",
         }} />
 
-        <div className="px-8 pb-8">
+        <div className="px-5 sm:px-8 pb-6 sm:pb-8">
           {/* Header */}
           <div className="text-center mb-6">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1">
@@ -130,7 +130,7 @@ function Receipt() {
             <p className="text-[11px] text-rose-400 uppercase tracking-wider mb-1">
               Projected Annual Loss
             </p>
-            <p className="text-2xl font-bold text-rose-500 tabular-nums">
+            <p className="text-xl sm:text-2xl font-bold text-rose-500 tabular-nums">
               <CountUp value={yearlyTotal} prefix="$" />
             </p>
           </div>

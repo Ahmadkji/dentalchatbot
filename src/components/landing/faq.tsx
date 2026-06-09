@@ -52,7 +52,7 @@ export function FAQSection() {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
 
   return (
-    <section id="faq" aria-labelledby="faq-heading" className="py-24 bg-[#F8FAFC]">
+    <section id="faq" aria-labelledby="faq-heading" className="py-16 sm:py-24 bg-[#F8FAFC]">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
         <FadeInSection>
           <div className="text-center mb-14">

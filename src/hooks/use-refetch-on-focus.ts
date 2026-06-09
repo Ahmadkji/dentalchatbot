@@ -27,7 +27,10 @@ export function useRefetchOnFocus(
   enabled = true,
 ) {
   const callbackRef = useRef(callback)
-  callbackRef.current = callback
+
+  useEffect(() => {
+    callbackRef.current = callback
+  }, [callback])
 
   const handleVisibility = useCallback(() => {
     if (!enabled) return

@@ -56,6 +56,37 @@ server.log
 
 # Screenshots
 step*.png
+*.png
+
+# Test results & reports
+test-results/
+playwright-report/
+
+# Temp deploy scripts
+.vercel-tmp/
+
+# Task planning files
+findings.md
+progress.md
+task_plan.md
+error-logs.md
+
+# TypeScript check output
+tsc_out*.txt
+tsc_final*.txt
+
+# Screenshots (root level)
+chat-*.png
+login-*.png
+forgot-*.png
+qa-*.png
+landing-*.png
+lead-*.png
+widget-*.png
+public-widget-*.png
+vercel-*.png
+docrenewal-*.png
+signup-*.png
 
 # Local Supabase CLI binaries
 bin/supabase

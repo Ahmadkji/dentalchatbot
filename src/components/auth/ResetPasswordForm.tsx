@@ -7,6 +7,8 @@ import { AlertCircle, ArrowLeft, CheckCircle2, Eye, EyeOff, Lock } from 'lucide-
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { FormAlert } from '@/components/auth/FormAlert'
+import { PasswordStrength } from '@/components/auth/PasswordStrength'
 
 export function ResetPasswordForm() {
   const router = useRouter()
@@ -154,10 +156,7 @@ export function ResetPasswordForm() {
               </div>
 
               {error ? (
-                <div className="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{error}</span>
-                </div>
+                <FormAlert variant="error">{error}</FormAlert>
               ) : null}
 
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -184,6 +183,7 @@ export function ResetPasswordForm() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  <PasswordStrength password={password} />
                 </div>
 
                 <div className="space-y-2">

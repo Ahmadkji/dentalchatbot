@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { MessageCircle, Shield, AlertCircle, BadgeCheck } from "lucide-react";
+import { MessageCircle, BadgeCheck } from "lucide-react";
 
 const conversations = [
   {
@@ -41,7 +41,7 @@ const conversations = [
 
 export function ConversationShowcase() {
   return (
-    <section className="py-24 bg-[#F8FAFC]">
+    <section className="py-16 sm:py-24 bg-[#F8FAFC]">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -75,11 +75,11 @@ export function ConversationShowcase() {
                 whileInView={{ opacity: 1, x: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.1 }}
-                className="p-6 flex items-center justify-between hover:bg-slate-50 transition-colors"
+                className="p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between hover:bg-slate-50 transition-colors"
               >
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center">
-                    <MessageCircle className="w-6 h-6 text-emerald-600" />
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-emerald-50 rounded-xl flex items-center justify-center shrink-0">
+                    <MessageCircle className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600" />
                   </div>
                   <div>
                     <div className="font-semibold text-slate-900">
@@ -94,14 +94,14 @@ export function ConversationShowcase() {
                   </div>
                 </div>
 
-                <div className="text-right ml-4 flex-shrink-0">
+                <div className="text-left sm:text-right ml-0 mt-2 sm:mt-0 sm:ml-4 flex-shrink-0 flex sm:flex-col items-center sm:items-end gap-2 sm:gap-0">
                   <span
                     className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${conv.statusColor} ${conv.statusBg}`}
                   >
                     <BadgeCheck className="w-3 h-3" />
                     {conv.outcome}
                   </span>
-                  <div className="text-xs text-slate-400 mt-1.5">
+                  <div className="text-xs text-slate-400 sm:mt-1.5">
                     {conv.time}
                   </div>
                 </div>

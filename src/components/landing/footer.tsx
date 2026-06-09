@@ -50,23 +50,159 @@ export function LandingFooter() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-slate-900 text-slate-400 py-12">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
-                <Stethoscope className="w-4 h-4 text-white" />
+      <footer className="bg-slate-900 text-slate-400">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-14">
+          {/* Link columns */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-10">
+            {/* Brand column */}
+            <div className="col-span-2 md:col-span-1">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
+                  <Stethoscope className="w-4 h-4 text-white" />
+                </div>
+                <span className="text-white font-bold text-lg">
+                  DentalGPT Studio
+                </span>
               </div>
-              <span className="text-white font-bold text-lg">
-                DentalGPT Studio
-              </span>
+              <p className="text-sm text-slate-400 max-w-xs leading-relaxed">
+                AI-powered front desk for modern dental clinics. Never miss a
+                patient inquiry again.
+              </p>
             </div>
-            <p className="text-sm">
-              AI-powered front desk for modern dental clinics.
-            </p>
-            <p className="text-sm text-slate-500">
+
+            {/* Product column */}
+            <div>
+              <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+                Product
+              </h3>
+              <ul className="space-y-3">
+                <li>
+                  <a
+                    href="#features"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Features
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="#pricing"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Pricing
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="#how-it-works"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    How it works
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="#faq"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    FAQ
+                  </a>
+                </li>
+              </ul>
+            </div>
+
+            {/* Company column */}
+            <div>
+              <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+                Company
+              </h3>
+              <ul className="space-y-3">
+                <li>
+                  <Link
+                    href="/login"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Sign in
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/login"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Get started
+                  </Link>
+                </li>
+                <li>
+                  <a
+                    href="mailto:support@dentalgpt.studio"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Contact
+                  </a>
+                </li>
+              </ul>
+            </div>
+
+            {/* Legal column */}
+            <div>
+              <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+                Legal
+              </h3>
+              <ul className="space-y-3">
+                <li>
+                  <Link
+                    href="/privacy"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Privacy Policy
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/terms"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Terms of Service
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/cookies"
+                    className="text-sm text-slate-400 hover:text-white transition-colors"
+                  >
+                    Cookie Policy
+                  </Link>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Bottom bar */}
+          <div className="mt-12 pt-8 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-sm text-slate-500 text-center sm:text-left">
               &copy; 2026 DentalGPT Studio. All rights reserved.
             </p>
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+              <Link
+                href="/privacy"
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Privacy
+              </Link>
+              <Link
+                href="/terms"
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Terms
+              </Link>
+              <Link
+                href="/cookies"
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Cookies
+              </Link>
+            </div>
           </div>
         </div>
       </footer>

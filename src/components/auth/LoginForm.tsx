@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { motion, type Variants } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   Mail,
   Lock,
@@ -11,79 +11,18 @@ import {
   EyeOff,
   ArrowRight,
   Shield,
-  MessageSquare,
-  Brain,
-  FileText,
   Stethoscope,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { sanitizeNextPath } from '@/lib/auth/navigation'
-
-const fadeInUp: Variants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: (i: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: i * 0.1, duration: 0.5, ease: 'easeOut' },
-  }),
-}
-
-const features = [
-  {
-    icon: MessageSquare,
-    title: '24/7 Dental Guidance',
-    desc: 'Instant answers to your dental questions',
-  },
-  {
-    icon: Brain,
-    title: 'AI Symptom Checker',
-    desc: 'Smart assessment of dental concerns',
-  },
-  {
-    icon: FileText,
-    title: 'Treatment Summaries',
-    desc: 'Detailed treatment plan explanations',
-  },
-]
-
-const recentActivity = [
-  {
-    icon: CheckCircle2,
-    title: 'Wisdom Tooth Consultation',
-    time: '2 hours ago',
-    status: 'Completed',
-    statusColor: 'text-emerald-600',
-    statusBg: 'bg-emerald-50',
-  },
-  {
-    icon: Clock,
-    title: 'Teeth Sensitivity Check',
-    time: 'Yesterday',
-    status: 'In Progress',
-    statusColor: 'text-blue-600',
-    statusBg: 'bg-blue-50',
-  },
-  {
-    icon: AlertCircle,
-    title: 'Gum Health Assessment',
-    time: '2 days ago',
-    status: 'Follow-up',
-    statusColor: 'text-amber-600',
-    statusBg: 'bg-amber-50',
-  },
-]
+import { isValidEmail } from '@/lib/validations'
+import { fadeInUp, features, urlErrorMessages } from './login-form-data'
+import { FormAlert } from '@/components/auth/FormAlert'
+import { PasswordStrength } from '@/components/auth/PasswordStrength'
 
 type AuthMode = 'signin' | 'signup'
-
-const urlErrorMessages: Record<string, string> = {
-  'auth-config-missing': 'Sign in is temporarily unavailable. Please try again later.',
-  'auth-callback': 'We could not complete sign in. Please try again.',
-}
 
 interface LoginFormProps {
   initialMode?: AuthMode
@@ -106,8 +45,8 @@ function LoginForm({ initialMode: propInitialMode }: LoginFormProps) {
   const [error, setError] = useState<string | null>(() => urlErrorMessages[urlError] ?? null)
 
   const validate = () => {
-    if (!email.trim()) {
-      return 'Email address is required.'
+    if (!email.trim() || !isValidEmail(email)) {
+      return 'Please enter a valid email address.'
     }
 
     if (!password) {
@@ -282,35 +221,6 @@ function LoginForm({ initialMode: propInitialMode }: LoginFormProps) {
               ))}
             </motion.div>
 
-            <motion.div variants={fadeInUp} custom={3} className="space-y-4">
-              <h3 className="font-semibold text-gray-800 text-sm">Recent Activity</h3>
-              <div className="space-y-2">
-                {recentActivity.map((item, index) => (
-                  <motion.div
-                    key={item.title}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.6 + index * 0.1, duration: 0.3 }}
-                    className="flex items-center justify-between p-3 bg-white/70 backdrop-blur-sm rounded-xl border border-gray-100/80 hover:border-emerald-100 hover:shadow-sm transition-all duration-200"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center">
-                        <item.icon className="w-4 h-4 text-gray-500" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-700 text-sm">{item.title}</p>
-                        <p className="text-gray-400 text-xs">{item.time}</p>
-                      </div>
-                    </div>
-                    <span
-                      className={`text-xs font-medium px-2.5 py-1 rounded-full ${item.statusColor} ${item.statusBg}`}
-                    >
-                      {item.status}
-                    </span>
-                  </motion.div>
-                ))}
-              </div>
-            </motion.div>
           </motion.div>
 
           <motion.div
@@ -338,10 +248,7 @@ function LoginForm({ initialMode: propInitialMode }: LoginFormProps) {
               </div>
 
               {error ? (
-                <div className="mb-4 p-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{error}</span>
-                </div>
+                <FormAlert variant="error">{error}</FormAlert>
               ) : null}
 
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -416,7 +323,10 @@ function LoginForm({ initialMode: propInitialMode }: LoginFormProps) {
                     </Link>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-400">Passwords must be at least 8 characters.</p>
+                  <>
+                    <PasswordStrength password={password} />
+                    <p className="text-xs text-gray-400">Must be at least 8 characters.</p>
+                  </>
                 )}
 
                 <Button

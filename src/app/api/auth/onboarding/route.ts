@@ -55,11 +55,17 @@ async function requireSession(request: Request) {
   const supabase = await createSupabaseRouteClient(cookieResponse)
 
   if (!supabase) {
+    console.error('[auth:onboarding] Auth configuration missing')
     return { cookieResponse, supabase: null as null, user: null as null, error: buildResponse({ error: 'Auth configuration missing.' }, 500) }
   }
 
   const { data: { user }, error } = await supabase.auth.getUser()
   if (error || !user) {
+    console.warn('[auth:onboarding] Session validation failed', {
+      hasError: Boolean(error),
+      errorMessage: error?.message ?? 'No user returned',
+      errorCode: error?.status ?? null,
+    })
     return { cookieResponse, supabase, user: null as null, error: buildResponse({ error: 'Session expired.' }, 401) }
   }
 

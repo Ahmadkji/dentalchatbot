@@ -70,7 +70,10 @@ export async function POST(request: Request) {
 
   const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
-  if (!supabase) return buildResponse({ error: 'Auth configuration missing.' }, 500)
+  if (!supabase) {
+    console.error('[auth:confirmation] Auth configuration missing')
+    return buildResponse({ error: 'Auth configuration missing.' }, 500)
+  }
 
   const { error } = await supabase.auth.resend({
     type: 'signup',

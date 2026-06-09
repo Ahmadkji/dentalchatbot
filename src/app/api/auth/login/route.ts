@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { assertSameOrigin, getClientIp, registerSession } from '@/lib/security'
+import { assertSameOrigin, extractSessionId, getClientIp, registerSession } from '@/lib/security'
 import { consumeDistributedRateLimit, authEmailKey, authIpKey } from '@/lib/rate-limit'
 import { sanitizeNextPath } from '@/lib/auth/navigation'
 import { createSupabaseRouteClient } from '@/lib/supabase/route-client'
@@ -49,7 +49,9 @@ export async function POST(request: Request) {
   }
 
   // Distributed rate limit: check both email and IP buckets (fail-closed)
+  // getClientIp is called once here and reused for session registration below.
   const ip = getClientIp(request.headers)
+  const userAgent = request.headers.get('user-agent') || 'unknown'
   const emailPreset = authEmailKey(email)
   const ipPreset = authIpKey(ip)
   const [emailResult, ipResult] = await Promise.all([
@@ -77,6 +79,7 @@ export async function POST(request: Request) {
   const cookieResponse = new NextResponse()
   const supabase = await createSupabaseRouteClient(cookieResponse)
   if (!supabase) {
+    console.error('[auth:login] Auth configuration missing')
     return buildResponse({ error: 'Auth configuration missing.' }, 500)
   }
 
@@ -110,6 +113,24 @@ export async function POST(request: Request) {
       return copyResponseCookies(cookieResponse, response)
     }
 
+    // Signup created an immediate session (email confirmation disabled).
+    // Register it for device tracking — same path as signin so signup is not
+    // left without a session record. Uses the stable JWT `session_id` claim.
+    const signupSessionKey = extractSessionId(data.session.access_token)
+    try {
+      await registerSession(
+        data.session.user.id,
+        signupSessionKey ?? randomUUID(),
+        ip,
+        userAgent
+      )
+    } catch (sessionError) {
+      console.error('[auth:login] signup session registration failed (non-fatal)', {
+        userId: data.session.user.id,
+        error: sessionError instanceof Error ? sessionError.message : String(sessionError),
+      })
+    }
+
     const response = buildResponse({ ok: true, next }, 200)
     return copyResponseCookies(cookieResponse, response)
   }
@@ -127,13 +148,25 @@ export async function POST(request: Request) {
     return buildResponse({ error: 'Invalid credentials' }, 401)
   }
 
-  // Register session for device tracking (Items 24, 26)
-  await registerSession(
-    data.session.user.id,
-    randomUUID(),
-    getClientIp(request.headers),
-    request.headers.get('user-agent') || 'unknown'
-  )
+  // Register session for device tracking (Items 24, 26).
+  // The key is the stable JWT `session_id` claim (not a random UUID) so the
+  // same physical device/session updates its existing registry row instead
+  // of creating a new one on every login. Fallback to randomUUID only when
+  // the claim cannot be decoded, so the registry still receives a key.
+  const sessionKey = extractSessionId(data.session.access_token) ?? randomUUID()
+  try {
+    await registerSession(
+      data.session.user.id,
+      sessionKey,
+      ip,
+      userAgent
+    )
+  } catch (sessionError) {
+    console.error('[auth:login] session registration failed (non-fatal)', {
+      userId: data.session.user.id,
+      error: sessionError instanceof Error ? sessionError.message : String(sessionError),
+    })
+  }
 
   const response = buildResponse({ ok: true, next }, 200)
   return copyResponseCookies(cookieResponse, response)

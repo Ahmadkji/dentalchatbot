@@ -1,21 +1,17 @@
 import { NextResponse } from 'next/server'
+import { buildSecurityHeaders } from '@/lib/security-headers'
 
-const devScriptSrc = "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-const prodScriptSrc = "script-src 'self' 'unsafe-inline'"
-
-const cspBase = "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https:; SCRIPT_PLACEHOLDER; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co"
-
-function getCspHeader(): string {
-  const scriptSrc = process.env.NODE_ENV === 'development' ? devScriptSrc : prodScriptSrc
-  return cspBase.replace('SCRIPT_PLACEHOLDER', scriptSrc)
-}
-
+/**
+ * Headers applied to private (no-store) API responses.
+ *
+ * These reuse the single security-header source of truth in
+ * `@/lib/security-headers` (nonce-based CSP) so there are never two competing
+ * CSP definitions. Previously this file declared its own weaker
+ * `'unsafe-inline'` script-src that diverged from the proxy policy.
+ */
 const PRIVATE_HEADERS: Record<string, string> = {
   'Cache-Control': 'private, no-store',
-  'Content-Security-Policy': getCspHeader(),
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'X-Frame-Options': 'DENY',
+  ...buildSecurityHeaders(),
 }
 
 export function setPrivateNoStore(response: NextResponse) {

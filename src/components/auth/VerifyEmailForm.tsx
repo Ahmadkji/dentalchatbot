@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { AlertCircle, ArrowLeft, CheckCircle2, Mail } from 'lucide-react'
+import { ArrowLeft, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { FormAlert } from '@/components/auth/FormAlert'
 
 interface VerifyEmailFormProps {
   email: string
@@ -42,7 +43,6 @@ export function VerifyEmailForm({ email }: VerifyEmailFormProps) {
       setSuccess(true)
     } catch (error) {
       console.error('[VerifyEmailForm] Network error during resend', {
-        email: email.trim().toLowerCase(),
         error: error instanceof Error ? error.message : String(error),
       })
       setError('Network error. Please check your connection and try again.')
@@ -74,17 +74,11 @@ export function VerifyEmailForm({ email }: VerifyEmailFormProps) {
           </div>
 
           {error ? (
-            <div className="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{error}</span>
-            </div>
+            <FormAlert variant="error">{error}</FormAlert>
           ) : null}
-
+          
           {success ? (
-            <div className="mb-4 p-3 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>Confirmation email sent. Please check your inbox.</span>
-            </div>
+            <FormAlert variant="success">Confirmation email sent. Please check your inbox.</FormAlert>
           ) : null}
 
           <Button

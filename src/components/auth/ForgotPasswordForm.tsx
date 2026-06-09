@@ -2,10 +2,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { AlertCircle, ArrowLeft, CheckCircle2, Mail } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { FormAlert } from '@/components/auth/FormAlert'
+import { isValidEmail } from '@/lib/validations'
 
 export function ForgotPasswordForm() {
   const [email, setEmail] = useState('')
@@ -16,8 +18,8 @@ export function ForgotPasswordForm() {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    if (!email.trim()) {
-      setError('Email address is required.')
+    if (!email.trim() || !isValidEmail(email)) {
+      setError('Please enter a valid email address.')
       return
     }
 
@@ -76,10 +78,7 @@ export function ForgotPasswordForm() {
               </div>
 
               {error ? (
-                <div className="mb-4 p-3 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{error}</span>
-                </div>
+                <FormAlert variant="error">{error}</FormAlert>
               ) : null}
 
               <form onSubmit={handleSubmit} className="space-y-4">

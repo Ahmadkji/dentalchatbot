@@ -2,6 +2,7 @@ import { ImageResponse } from "next/og";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
+export const alt = "DentalGPT Studio - AI Front Desk for Dental Clinics";
 
 export default function OgImage() {
   return new ImageResponse(
@@ -20,7 +21,6 @@ export default function OgImage() {
           fontFamily: "system-ui, sans-serif",
         }}
       >
-        {/* Logo icon */}
         <div
           style={{
             width: 80,
@@ -32,12 +32,13 @@ export default function OgImage() {
             justifyContent: "center",
             marginBottom: 32,
             fontSize: 40,
+            fontWeight: 800,
+            color: "#059669",
           }}
         >
-          🦷
+          D
         </div>
 
-        {/* Brand name */}
         <div
           style={{
             fontSize: 64,
@@ -50,7 +51,6 @@ export default function OgImage() {
           DentalGPT Studio
         </div>
 
-        {/* Tagline */}
         <div
           style={{
             fontSize: 28,
@@ -62,7 +62,6 @@ export default function OgImage() {
           AI Front Desk for Dental Clinics
         </div>
 
-        {/* Sub-tagline */}
         <div
           style={{
             fontSize: 20,

@@ -12,11 +12,11 @@ const ServerEnvSchema = z.object({
   OPENROUTER_SITE_NAME: z.string().min(1).optional(),
   AI_DAILY_MESSAGE_LIMIT: z.number().int().positive().optional(),
   AI_RESPONSE_TIMEOUT_MS: z.number().int().positive().optional(),
-  FREEMIUS_PRODUCT_ID: z.string().min(1).optional(),
-  FREEMIUS_API_KEY: z.string().min(1).optional(),
-  FREEMIUS_SECRET_KEY: z.string().min(1).optional(),
-  FREEMIUS_PUBLIC_KEY: z.string().min(1).optional(),
-  FREEMIUS_DEFAULT_PLAN_ID: z.string().min(1).optional(),
+  LEMONSQUEEZY_API_KEY: z.string().min(1).optional(),
+  LEMONSQUEEZY_STORE_ID: z.string().min(1).optional(),
+  LEMONSQUEEZY_DEFAULT_VARIANT_ID: z.string().min(1).optional(),
+  LEMONSQUEEZY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  LEMONSQUEEZY_TEST_MODE: z.enum(['true', 'false']).optional(),
 });
 
 const serverResult = ServerEnvSchema.safeParse({
@@ -32,11 +32,11 @@ const serverResult = ServerEnvSchema.safeParse({
   AI_RESPONSE_TIMEOUT_MS: process.env.AI_RESPONSE_TIMEOUT_MS
     ? Number(process.env.AI_RESPONSE_TIMEOUT_MS)
     : undefined,
-  FREEMIUS_PRODUCT_ID: process.env.FREEMIUS_PRODUCT_ID,
-  FREEMIUS_API_KEY: process.env.FREEMIUS_API_KEY,
-  FREEMIUS_SECRET_KEY: process.env.FREEMIUS_SECRET_KEY,
-  FREEMIUS_PUBLIC_KEY: process.env.FREEMIUS_PUBLIC_KEY,
-  FREEMIUS_DEFAULT_PLAN_ID: process.env.FREEMIUS_DEFAULT_PLAN_ID,
+  LEMONSQUEEZY_API_KEY: process.env.LEMONSQUEEZY_API_KEY,
+  LEMONSQUEEZY_STORE_ID: process.env.LEMONSQUEEZY_STORE_ID,
+  LEMONSQUEEZY_DEFAULT_VARIANT_ID: process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID,
+  LEMONSQUEEZY_WEBHOOK_SECRET: process.env.LEMONSQUEEZY_WEBHOOK_SECRET,
+  LEMONSQUEEZY_TEST_MODE: process.env.LEMONSQUEEZY_TEST_MODE,
 });
 
 if (!serverResult.success && process.env.NODE_ENV !== 'test') {
@@ -54,11 +54,11 @@ const serverDefaults = {
   OPENROUTER_SITE_NAME: undefined as string | undefined,
   AI_DAILY_MESSAGE_LIMIT: undefined as number | undefined,
   AI_RESPONSE_TIMEOUT_MS: undefined as number | undefined,
-  FREEMIUS_PRODUCT_ID: '',
-  FREEMIUS_API_KEY: '',
-  FREEMIUS_SECRET_KEY: '',
-  FREEMIUS_PUBLIC_KEY: '',
-  FREEMIUS_DEFAULT_PLAN_ID: undefined as string | undefined,
+  LEMONSQUEEZY_API_KEY: '',
+  LEMONSQUEEZY_STORE_ID: '',
+  LEMONSQUEEZY_DEFAULT_VARIANT_ID: undefined as string | undefined,
+  LEMONSQUEEZY_WEBHOOK_SECRET: '',
+  LEMONSQUEEZY_TEST_MODE: 'false' as 'true' | 'false',
 };
 
 export const serverEnv = {

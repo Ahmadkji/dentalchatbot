@@ -46,27 +46,3 @@ export async function requireAuth() {
 
   return { user, supabase, error: null } as const
 }
-
-/**
- * Check that a record belongs to the authenticated user.
- * Returns a 404 response (not 403) to avoid leaking record existence.
- * When returning null, the record is guaranteed to be non-null and owned by the user.
- *
- * Usage:
- *   const ownershipError = requireOwnership(record, user.id)
- *   if (ownershipError) return ownershipError
- *   // record is now narrowed to non-null
- */
-export function requireOwnership<T extends { userId?: string }>(
-  record: T | null,
-  userId: string
-): NextResponse | null {
-  if (!record || record.userId !== userId) {
-    return NextResponse.json(
-      { error: 'Not found' },
-      { status: 404 }
-    )
-  }
-
-  return null
-}

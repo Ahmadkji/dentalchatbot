@@ -102,6 +102,8 @@
 
   var settings = defaults;
   var isOpen = false;
+  var autoOpenTimer = null;
+  var tooltipHideTimer = null;
 
   function logWidgetEvent(eventType, metadata) {
     if (!widgetAccessToken) return;
@@ -125,7 +127,12 @@
     });
   }
 
+  function isMobile() {
+    return window.innerWidth < 640;
+  }
+
   function getSize(size) {
+    if (isMobile()) return { width: '100%', height: '100%' };
     if (size === 'compact') return { width: '340px', height: '560px' };
     if (size === 'large') return { width: '420px', height: '700px' };
     return { width: '380px', height: '640px' };
@@ -134,6 +141,13 @@
   function applyPosition(element, position, bottom) {
     element.style.left = '';
     element.style.right = '';
+
+    if (isMobile()) {
+      element.style.left = '0';
+      element.style.right = '0';
+      element.style.bottom = '0';
+      return;
+    }
 
     if (position === 'bottom-left') {
       element.style.left = '20px';
@@ -506,32 +520,70 @@
 
     launcher.style.background = settings.primaryColor;
     launcher.style.color = settings.textOnPrimary;
-    applyPosition(launcher, settings.widgetPosition, '20px');
 
-    iframe.style.width = size.width;
-    iframe.style.height = size.height;
-    applyPosition(iframe, settings.widgetPosition, '88px');
-
-    tooltip.textContent = settings.tooltipText || defaults.tooltipText;
-    applyPosition(tooltip, settings.widgetPosition, '90px');
-
-    if (settings.widgetPosition === 'bottom-left') {
-      tooltip.style.left = '20px';
-      tooltip.style.right = '';
+    if (isMobile()) {
+      launcher.style.position = 'fixed';
+      launcher.style.bottom = '16px';
+      if (settings.widgetPosition === 'bottom-left') {
+        launcher.style.left = '16px';
+        launcher.style.right = '';
+      } else {
+        launcher.style.right = '16px';
+        launcher.style.left = '';
+      }
     } else {
-      tooltip.style.right = '20px';
-      tooltip.style.left = '';
+      applyPosition(launcher, settings.widgetPosition, '20px');
+    }
+
+    if (isMobile()) {
+      iframe.style.width = '100%';
+      iframe.style.height = '100%';
+      iframe.style.left = '0';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.top = '0';
+      iframe.style.maxWidth = '100%';
+      iframe.style.maxHeight = '100%';
+      iframe.style.borderRadius = '0';
+      iframe.style.boxShadow = 'none';
+    } else {
+      iframe.style.top = '';
+      iframe.style.width = size.width;
+      iframe.style.height = size.height;
+      iframe.style.maxWidth = 'calc(100vw - 24px)';
+      iframe.style.maxHeight = 'calc(100vh - 110px)';
+      iframe.style.borderRadius = '18px';
+      iframe.style.boxShadow = '0 26px 56px rgba(2, 6, 23, 0.26)';
+      applyPosition(iframe, settings.widgetPosition, '88px');
+    }
+
+    if (isMobile()) {
+      tooltip.style.display = 'none';
+    } else {
+      tooltip.style.display = '';
+      tooltip.textContent = settings.tooltipText || defaults.tooltipText;
+      applyPosition(tooltip, settings.widgetPosition, '90px');
+
+      if (settings.widgetPosition === 'bottom-left') {
+        tooltip.style.left = '20px';
+        tooltip.style.right = '';
+      } else {
+        tooltip.style.right = '20px';
+        tooltip.style.left = '';
+      }
     }
 
     setTooltipVisible(Boolean(settings.showTooltip));
 
     if (settings.showTooltip) {
-      window.setTimeout(function () {
+      if (tooltipHideTimer) clearTimeout(tooltipHideTimer);
+      tooltipHideTimer = window.setTimeout(function () {
         setTooltipVisible(false);
+        tooltipHideTimer = null;
       }, 6500);
     }
 
-    if (settings.autoOpenDelay !== 'off') {
+    if (settings.autoOpenDelay !== 'off' && !isOpen) {
       var shouldAutoOpen = false;
 
       try {
@@ -541,18 +593,30 @@
       }
 
       if (shouldAutoOpen) {
+        if (autoOpenTimer) clearTimeout(autoOpenTimer);
         var delay = settings.autoOpenDelay === '10s' ? 10000 : 5000;
-        window.setTimeout(function () {
+        autoOpenTimer = window.setTimeout(function () {
           setOpen(true);
           try {
             window.localStorage.setItem(storageKey, 'true');
           } catch (e) {
             // ignore
           }
+          autoOpenTimer = null;
         }, delay);
       }
     }
   }
+
+  // Re-apply settings on resize (orientation change, window resize)
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    if (!settings) return;
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      applySettings(settings);
+    }, 150);
+  }, { passive: true });
 
   // Remove old fetch that hit /api/widget-settings directly.
   // Config is now loaded via bootstrap in the .then chain above.

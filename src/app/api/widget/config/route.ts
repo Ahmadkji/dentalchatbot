@@ -4,7 +4,7 @@ import { mintWidgetAccessToken } from '@/lib/widget/widget-access-token'
 import { getClientIp } from '@/lib/security'
 import { consumeDistributedRateLimit, widgetConfigKey } from '@/lib/rate-limit'
 import { isOriginAllowed } from '@/lib/clinics/validation'
-import { getClinicFreemiusBillingStatus } from '@/lib/billing/freemius-server'
+import { getClinicBillingStatus } from '@/lib/billing/lemonsqueezy-server'
 import { buildLeadGatePayload } from '@/lib/chat/lead-gate'
 import { getLeadGateSettings } from '@/lib/leads/lead-gate-settings'
 
@@ -121,7 +121,7 @@ export async function GET(request: NextRequest) {
       .eq('is_active', true)
       .order('sort_order', { ascending: true })
 
-    const billing = await getClinicFreemiusBillingStatus(clinic.clinic_id)
+    const billing = await getClinicBillingStatus(clinic.clinic_id)
     const { data: leadSettingRows } = await adminClient
       .from('clinic_settings')
       .select('key,value')

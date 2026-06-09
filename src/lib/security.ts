@@ -3,7 +3,57 @@ import 'server-only'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 const MAX_SESSIONS_PER_USER = 5
-const TOKEN_REFRESH_LOCK_TTL_MS = 5000
+
+// --------------- Session identifier extraction ---------------
+
+/**
+ * Extract the stable `session_id` claim from a Supabase access token (JWT).
+ *
+ * Supabase Auth issues a `session_id` UUID claim that uniquely identifies a
+ * session for its entire lifetime (it does NOT rotate on refresh, unlike the
+ * refresh_token). This makes it the correct key for a device/session registry.
+ *
+ * This function only decodes the JWT payload; it does NOT verify the signature.
+ * Signature verification is Supabase Auth's responsibility — we receive the
+ * token from a trusted, freshly-created session (signInWithPassword / signUp),
+ * so we trust its contents at this point.
+ *
+ * Reference: https://supabase.com/docs/guides/auth/sessions
+ *   "Every access token contains a `session_id` claim, a UUID, uniquely
+ *    identifying the session of the user."
+ */
+export function extractSessionId(accessToken: string | null | undefined): string | null {
+  if (!accessToken || typeof accessToken !== 'string') {
+    return null
+  }
+
+  const parts = accessToken.split('.')
+  if (parts.length !== 3) {
+    console.warn('[security:extractSessionId] access token is not a 3-part JWT', {
+      partCount: parts.length,
+    })
+    return null
+  }
+
+  try {
+    // base64url -> base64 -> JSON. Node's Buffer handles padding.
+    const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8')
+    const payload = JSON.parse(payloadJson) as { session_id?: unknown }
+
+    const sessionId = payload?.session_id
+    if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
+      return sessionId.trim()
+    }
+
+    console.warn('[security:extractSessionId] JWT payload has no usable session_id claim')
+    return null
+  } catch (error) {
+    console.error('[security:extractSessionId] failed to decode access token', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
 
 const SENSITIVE_KEYS = new Set([
   'password',
@@ -24,44 +74,10 @@ export interface BucketResult {
   resetAt: number
 }
 
-// --------------- Token Refresh Lock (Item 23) ---------------
-
-interface RefreshLockState {
-  locks: Map<string, number>
-}
-
-const globalForRefreshLock = globalThis as typeof globalThis & {
-  __refreshLockState__?: RefreshLockState
-}
-
-const refreshLockState: RefreshLockState =
-  globalForRefreshLock.__refreshLockState__ ?? {
-    locks: new Map<string, number>(),
-  }
-
-globalForRefreshLock.__refreshLockState__ = refreshLockState
-
-/**
- * Acquire a per-user lock for token refresh.
- * Returns true if the lock was acquired, false if already locked.
- * Locks auto-expire after TOKEN_REFRESH_LOCK_TTL_MS to prevent deadlocks.
- */
-export function acquireRefreshLock(userId: string, now: number = Date.now()): boolean {
-  const existing = refreshLockState.locks.get(userId)
-  if (existing && now - existing < TOKEN_REFRESH_LOCK_TTL_MS) {
-    return false
-  }
-  refreshLockState.locks.set(userId, now)
-  return true
-}
-
-export function releaseRefreshLock(userId: string): void {
-  refreshLockState.locks.delete(userId)
-}
-
-export function clearRefreshLockStore() {
-  refreshLockState.locks.clear()
-}
+// Note: A per-user in-process token-refresh lock was removed intentionally.
+// Supabase Auth already deduplicates concurrent refreshes server-side via its
+// 10-second refresh-token reuse interval (see Sessions docs), so an in-process
+// lock would add complexity for marginal benefit.
 
 // --------------- Session Registry (Items 24, 26) ---------------
 
@@ -116,54 +132,13 @@ export async function registerSession(
   }
 }
 
-export async function unregisterSession(userId: string, sessionId: string): Promise<void> {
-  const admin = createSupabaseAdminClient()
-  const { error } = await admin
-    .from('user_sessions')
-    .delete()
-    .match({
-      user_id: userId,
-      session_key: normalizeSessionId(sessionId),
-    })
-
-  if (error) {
-    console.error('[security:unregisterSession] failed to remove session', {
-      userId,
-      error: error.message,
-    })
-  }
+export async function unregisterSession(_userId: string, _sessionId: string): Promise<void> {
+  // Deprecated: per-session logout is handled by clearUserSessions (global)
+  // via supabase.auth.signOut(). Kept as a no-op stub for backward compat;
+  // new code should not call this.
+  console.warn('[security:unregisterSession] deprecated no-op; use clearUserSessions')
 }
 
-export async function getSessionCount(userId: string): Promise<number> {
-  const admin = createSupabaseAdminClient()
-  const { count, error } = await admin
-    .from('user_sessions')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-
-  if (error) {
-    console.error('[security:getSessionCount] failed to read session count', {
-      userId,
-      error: error.message,
-    })
-    return 0
-  }
-
-  return count ?? 0
-}
-
-export async function clearSessionRegistry(): Promise<void> {
-  const admin = createSupabaseAdminClient()
-  const { error } = await admin.from('user_sessions').delete()
-
-  if (error) {
-    console.error('[security:clearSessionRegistry] failed to clear session registry', {
-      error: error.message,
-    })
-  }
-}
-
-/** Clear all sessions for a user from shared storage. */
 export async function clearUserSessions(userId: string): Promise<void> {
   const admin = createSupabaseAdminClient()
   const { error } = await admin

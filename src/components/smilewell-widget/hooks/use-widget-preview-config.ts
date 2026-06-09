@@ -25,11 +25,10 @@ export function useWidgetPreviewConfig(input: PreviewConfigInput) {
           clinicId,
           clinicSlug,
         })
-        const [settingsRes, promptsRes, clinicRes, billingRes, leadSettingsRes] = await Promise.all([
+        const [settingsRes, promptsRes, clinicRes, leadSettingsRes] = await Promise.all([
           fetch('/api/widget-settings', { cache: 'no-store' }),
           fetch('/api/widget-settings/quick-prompts', { cache: 'no-store' }),
           fetch('/api/clinic', { cache: 'no-store' }),
-          fetch('/api/billing/freemius/status', { cache: 'no-store' }),
           fetch('/api/lead-settings', { cache: 'no-store' }),
         ])
 
@@ -62,8 +61,6 @@ export function useWidgetPreviewConfig(input: PreviewConfigInput) {
         const settings = await settingsRes.json()
         const prompts = await promptsRes.json()
         const clinic = clinicRes.ok ? await clinicRes.json() : null
-        const billing = billingRes.ok ? await billingRes.json() : null
-        void billing
         const leadSettings = leadSettingsRes.ok ? await leadSettingsRes.json() : null
         if (!leadSettingsRes.ok) {
           logWidgetFrame('warn', 'Preview lead settings failed to load. Falling back to defaults.', {
