@@ -96,6 +96,26 @@
   - Ran `npm run build`; passed, including static generation for 75 routes.
   - Ran `npm run test:run`; 8 files and 82 tests passed.
 
+### Deploy Phase 3: Production Deploy
+- **Status:** complete
+- Actions taken:
+  - Ran `vercel deploy --prod --yes` against project `workspace-79721d51-2e5e-4efc-ba28-2f4c0d52600a`.
+  - Vercel build passed in production.
+  - Deployment `dpl_xQw4uUVxfgoeZzQ88SDVpnnxGxsi` reached Ready.
+  - Vercel aliased the deployment to `https://dentaflow.chat`.
+
+### Deploy Phase 4: Live Verification
+- **Status:** complete
+- Actions taken:
+  - Verified `https://dentaflow.chat/` returns 200.
+  - Verified `https://dentaflow.chat/login` returns 200.
+  - Verified `https://dentaflow.chat/signup` returns 200.
+  - Verified anonymous `GET /api/billing/lemonsqueezy/status` returns 401.
+  - Verified missing-param `GET /api/widget/config` returns 400.
+  - Verified anonymous `POST /api/billing/lemonsqueezy/checkout` returns 403.
+  - Verified `vercel inspect dentaflow.chat` points to deployment `dpl_xQw4uUVxfgoeZzQ88SDVpnnxGxsi`.
+  - Verified no recent 500 logs on the deployment.
+
 ## Deployment Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
@@ -105,12 +125,21 @@
 | Typecheck | `npm run typecheck` | No TypeScript errors | Passed | Pass |
 | Production build | `npm run build` | Next production build succeeds | Passed; 75 app routes generated | Pass |
 | Unit/integration tests | `npm run test:run` | Existing test suite passes | 8 files, 82 tests passed | Pass |
+| Production deploy | `vercel deploy --prod --yes` | Deployment reaches Ready and aliases domain | Ready, aliased to `https://dentaflow.chat` | Pass |
+| Root page live check | `curl https://dentaflow.chat/` | HTTP 200 | 200 | Pass |
+| Login page live check | `curl https://dentaflow.chat/login` | HTTP 200 | 200 | Pass |
+| Signup page live check | `curl https://dentaflow.chat/signup` | HTTP 200 | 200 | Pass |
+| Anonymous billing status | `curl https://dentaflow.chat/api/billing/lemonsqueezy/status` | Reject unauthenticated request | 401 | Pass |
+| Missing widget config params | `curl https://dentaflow.chat/api/widget/config` | Reject malformed request | 400 | Pass |
+| Anonymous checkout POST | `curl -X POST https://dentaflow.chat/api/billing/lemonsqueezy/checkout` | Reject unauthenticated request | 403 | Pass |
+| Deployment 500 logs | `vercel logs dpl_xQw4uUVxfgoeZzQ88SDVpnnxGxsi --status-code 500 --since 10m` | No 500s | No logs found | Pass |
 
 ## Deployment Error Log
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
 | 2026-06-09 | No deploy errors yet | 1 | Continue with pre-deploy checks |
 | 2026-06-09 | `vercel env ls production --project ...` failed because `vercel env` does not support `--project` | 1 | Repoint local Vercel link to the domain-owning project before env/deploy commands |
+| 2026-06-09 | `vercel logs --level error` showed one error-level log for anonymous checkout probe | 1 | Confirmed it was the intentional 403 security check, not a production 500 |
 
 ---
 *Update after completing each phase or encountering errors*

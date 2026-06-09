@@ -138,5 +138,14 @@
 ## Visual/Browser Findings
 - No browser or screenshot inspection yet.
 
+## 2026-06-09 Production Deployment Findings
+- `dentaflow.chat` is owned by Vercel project `workspace-79721d51-2e5e-4efc-ba28-2f4c0d52600a`, not the newly created `dentaflow-chat` project.
+- Local `.vercel/project.json` was repointed to the domain-owning project so deployment and env checks target the live project.
+- The domain-owning project has production env vars for Supabase, OpenRouter, widget access, and Lemon Squeezy API/store/webhook/test mode.
+- `LEMONSQUEEZY_DEFAULT_VARIANT_ID` is still not present in production env, so checkout remains blocked until the Lemon Squeezy account has a real product variant.
+- Supabase migration list shows local and remote are aligned through `20260607120000_lemon_squeezy_billing.sql`.
+- Production deployment `dpl_xQw4uUVxfgoeZzQ88SDVpnnxGxsi` is Ready and aliased to `https://dentaflow.chat`.
+- Live checks passed for public pages and protected/malformed API behavior; no recent 500 logs were found.
+
 ---
 *Update this file after every 2 view/browser/search operations*

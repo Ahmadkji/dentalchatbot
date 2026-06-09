@@ -92,15 +92,15 @@ Deploy the current dirty worktree to Vercel production and verify that `https://
 - **Status:** complete
 
 ### Deploy Phase 3: Production Deploy
-- [ ] Run Vercel production deploy
-- [ ] Confirm deployment is aliased to `dentaflow.chat`
-- **Status:** in_progress
+- [x] Run Vercel production deploy
+- [x] Confirm deployment is aliased to `dentaflow.chat`
+- **Status:** complete
 
 ### Deploy Phase 4: Live Verification
-- [ ] Request `https://dentaflow.chat`
-- [ ] Check important public/auth/billing paths without creating real users or payments
-- [ ] Log any production-only warnings or blockers
-- **Status:** pending
+- [x] Request `https://dentaflow.chat`
+- [x] Check important public/auth/billing paths without creating real users or payments
+- [x] Log any production-only warnings or blockers
+- **Status:** complete
 
 ## Deploy Scope
 - I am deploying the current repository state as-is.
@@ -108,3 +108,11 @@ Deploy the current dirty worktree to Vercel production and verify that `https://
 - I am NOT changing product code unless a hard deploy blocker is proven.
 - I am NOT creating real Supabase auth users, Lemon Squeezy products, or live payments.
 - I am NOT changing hosted environment variables unless the deploy proves they are missing and the fix is required for production to boot.
+
+## Deploy Result
+- Production deployment: `dpl_xQw4uUVxfgoeZzQ88SDVpnnxGxsi`
+- Deployment URL: `https://workspace-79721d51-2e5e-4efc-ba28-2f4c0d52600a-2xgr5lzqf.vercel.app`
+- Domain alias: `https://dentaflow.chat`
+- Vercel status: Ready
+- Live verification passed for `/`, `/login`, `/signup`, protected billing status, missing widget config params, and no recent 500 logs.
+- Remaining known blocker: `LEMONSQUEEZY_DEFAULT_VARIANT_ID` is not set in production, so deploy is live but Lemon Squeezy checkout is not end-to-end ready until a real product variant exists.
