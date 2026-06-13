@@ -17,6 +17,11 @@ const ServerEnvSchema = z.object({
   LEMONSQUEEZY_DEFAULT_VARIANT_ID: z.string().min(1).optional(),
   LEMONSQUEEZY_WEBHOOK_SECRET: z.string().min(1).optional(),
   LEMONSQUEEZY_TEST_MODE: z.enum(['true', 'false']).optional(),
+  MAILERSEND_API_KEY: z.string().min(1).optional(),
+  MAILERSEND_FROM_EMAIL: z.string().email().optional(),
+  MAILERSEND_FROM_NAME: z.string().min(1).optional(),
+  MAILERSEND_WEBHOOK_SIGNING_SECRET: z.string().min(1).optional(),
+  HUMAN_HANDOFF_RUNNER_SECRET: z.string().min(1).optional(),
 });
 
 const serverResult = ServerEnvSchema.safeParse({
@@ -37,6 +42,11 @@ const serverResult = ServerEnvSchema.safeParse({
   LEMONSQUEEZY_DEFAULT_VARIANT_ID: process.env.LEMONSQUEEZY_DEFAULT_VARIANT_ID,
   LEMONSQUEEZY_WEBHOOK_SECRET: process.env.LEMONSQUEEZY_WEBHOOK_SECRET,
   LEMONSQUEEZY_TEST_MODE: process.env.LEMONSQUEEZY_TEST_MODE,
+  MAILERSEND_API_KEY: process.env.MAILERSEND_API_KEY,
+  MAILERSEND_FROM_EMAIL: process.env.MAILERSEND_FROM_EMAIL,
+  MAILERSEND_FROM_NAME: process.env.MAILERSEND_FROM_NAME,
+  MAILERSEND_WEBHOOK_SIGNING_SECRET: process.env.MAILERSEND_WEBHOOK_SIGNING_SECRET,
+  HUMAN_HANDOFF_RUNNER_SECRET: process.env.HUMAN_HANDOFF_RUNNER_SECRET,
 });
 
 if (!serverResult.success && process.env.NODE_ENV !== 'test') {
@@ -59,6 +69,11 @@ const serverDefaults = {
   LEMONSQUEEZY_DEFAULT_VARIANT_ID: undefined as string | undefined,
   LEMONSQUEEZY_WEBHOOK_SECRET: '',
   LEMONSQUEEZY_TEST_MODE: 'false' as 'true' | 'false',
+  MAILERSEND_API_KEY: '',
+  MAILERSEND_FROM_EMAIL: '',
+  MAILERSEND_FROM_NAME: 'SmileWell',
+  MAILERSEND_WEBHOOK_SIGNING_SECRET: '',
+  HUMAN_HANDOFF_RUNNER_SECRET: '',
 };
 
 export const serverEnv = {

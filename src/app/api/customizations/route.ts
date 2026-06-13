@@ -7,6 +7,7 @@ import {
   CUSTOMIZATION_DEFAULTS,
   mapCustomizationSettings,
 } from '@/lib/customizations/settings'
+import { getHumanHandoffDeliveryConfiguration } from '@/lib/human-handoff/config'
 
 const settingsSchema = z.object({
   fallback_message: z.string().trim().min(1).max(600),
@@ -104,6 +105,36 @@ export async function PUT(request: NextRequest) {
     const clinicId = current.clinic.id
     const settings = parsed.data
 
+    if (settings.chat_mode === 'human') {
+      const { data: leadSettingRows, error: leadSettingsError } = await supabase
+        .from('clinic_settings')
+        .select('key,value')
+        .eq('clinic_id', clinicId)
+        .in('key', ['lead_notifications_enabled', 'lead_notification_emails'])
+
+      if (leadSettingsError) {
+        console.error('[customizations:PUT] Failed to load lead settings before enabling human mode', {
+          userId: user.id,
+          clinicId,
+          error: leadSettingsError.message,
+        })
+        return NextResponse.json({ error: 'Failed to validate human handoff settings.' }, { status: 500 })
+      }
+
+      const handoffConfig = getHumanHandoffDeliveryConfiguration((leadSettingRows ?? []) as Array<{ key: string; value: string }>)
+      if (!handoffConfig.ready) {
+        console.warn('[customizations:PUT] Rejected human mode because handoff delivery is not ready', {
+          userId: user.id,
+          clinicId,
+          reason: handoffConfig.reason,
+        })
+        return NextResponse.json(
+          { error: handoffConfig.message || 'Human handoff is not configured.' },
+          { status: 400 },
+        )
+      }
+    }
+
     // Upsert keeps this route resilient even if a clinic predates onboarding defaults.
     const { error: botError } = await supabase
       .from('bot_settings')
@@ -131,7 +162,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, settings })
   } catch (error) {
-    console.error('[customizations:PATCH] Failed to update customizations', {
+    console.error('[customizations:PUT] Failed to update customizations', {
       userId: user.id,
       error: error instanceof Error ? error.message : String(error),
     })

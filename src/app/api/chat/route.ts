@@ -25,8 +25,14 @@ import { detectUnansweredReason } from '@/lib/unanswered/detect'
 import { normalizeUnansweredQuestion, unansweredQuestionKey } from '@/lib/unanswered/normalize'
 import { leadCreateSchema, getLeadConflictMessage } from '@/lib/leads/lead-contract'
 import { getLeadGateSettings } from '@/lib/leads/lead-gate-settings'
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
+import { detectHumanHandoffIntent } from '@/lib/chat/automation'
+import {
+  queueHumanHandoffRequest,
+  deliverHumanHandoffRequest,
+} from '@/lib/human-handoff/service'
+import { getHumanHandoffDeliveryConfiguration } from '@/lib/human-handoff/config'
 
 import {
   type CitationRow,
@@ -196,9 +202,15 @@ export async function POST(request: NextRequest) {
           .from('clinic_settings')
           .select('key,value')
           .eq('clinic_id', aiProfile.clinic_id)
-          .in('key', ['lead_collection_enabled', 'lead_required_fields'])
+          .in('key', [
+            'lead_collection_enabled',
+            'lead_required_fields',
+            'lead_notifications_enabled',
+            'lead_notification_emails',
+          ])
       : { data: [] as Array<{ key: string; value: string }> }
     const leadGateSettings = getLeadGateSettings(leadSettingRows ?? [])
+    const humanHandoffDeliveryConfig = getHumanHandoffDeliveryConfiguration(leadSettingRows ?? [])
     const leadGatePayload = buildLeadGatePayload({
       fields: leadGateSettings.requiredFields,
       prompt: leadGateSettings.prompt,
@@ -579,20 +591,34 @@ export async function POST(request: NextRequest) {
 
     const runtimeCustomization = await loadRuntimeCustomizationSettings(adminClient, conversation.clinic_id)
     const canCreateAppointmentRequests = billingStatus.features.canCreateAppointmentRequests
-    const transcriptLines = [
-      ...(historyMessages ?? []).map((row) => `${row.role}: ${row.content}`),
-      `user: ${messageText}`,
-    ]
+    const automationMessages = (historyMessages ?? []).map((row) => ({
+      role: row.role as 'user' | 'assistant' | 'system',
+      content: row.content,
+    }))
     let automationState = mergeAutomationState(
       currentConversationStateRow?.automation_state,
-      extractAutomationFields(transcriptLines),
+      extractAutomationFields(automationMessages),
     )
+    const humanHandoffTriggerSource =
+      runtimeCustomization.chatMode === 'human'
+        ? 'chat_mode'
+        : detectHumanHandoffIntent(messageText)
+          ? 'user_request'
+          : null
+    const shouldCreateHumanHandoff = Boolean(humanHandoffTriggerSource)
+    const clinicName = aiProfile?.name || 'the dental clinic'
+    const clinicSlugForMail = clinicSlug || aiProfile?.slug || 'clinic'
+    const dashboardUrl = new URL('/dashboard/inbox', request.url).toString()
+    let humanHandoffRequest:
+      | { handoff: { id: string }; shouldDeliver: boolean; reason: string | null }
+      | null = null
 
     let aiResponse: string
 
     if (runtimeCustomization.chatMode === 'human') {
-      aiResponse =
-        "Thanks for your message. A human team member will reply shortly. I won't auto-answer in this chat mode."
+      aiResponse = humanHandoffDeliveryConfig.ready
+        ? "Thanks for your message. A human team member will reply shortly. I won't auto-answer in this chat mode."
+        : `Thanks for your message. Human follow-up in chat is currently unavailable. Please contact ${clinicName} directly${aiProfile?.phone ? ` at ${aiProfile.phone}` : ''}.`
     } else {
       aiResponse = await generateAssistantReply({
         messages: llmMessages,
@@ -626,10 +652,43 @@ export async function POST(request: NextRequest) {
       throw assistMsgError || new Error('Failed to save assistant message')
     }
 
+    if (shouldCreateHumanHandoff) {
+      try {
+        humanHandoffRequest = await queueHumanHandoffRequest(adminClient, {
+          clinicId: conversation.clinic_id,
+          conversationId: conversation.id,
+          leadId: automationState.leadId,
+          triggerSource: humanHandoffTriggerSource as 'chat_mode' | 'user_request',
+          visitorName: automationState.fields.name || null,
+          visitorEmail: automationState.fields.email || null,
+          visitorPhone: automationState.fields.phone || null,
+          sourcePage: conversation.source_page || sourcePage || '/',
+          latestUserMessage: messageText,
+          assistantMessage: finalResponse,
+          summary:
+            runtimeCustomization.chatMode === 'human'
+              ? humanHandoffDeliveryConfig.ready
+                ? 'Conversation started in human mode and queued for staff follow-up.'
+                : 'Conversation started in human mode, but staff notification is not configured.'
+              : 'Visitor asked for a human follow-up.',
+          clinicName,
+          clinicSlug: clinicSlugForMail,
+          dashboardUrl,
+          clinicSettings: leadSettingRows ?? [],
+        })
+      } catch (error) {
+        console.error('[chat:POST] Failed to queue human handoff request', {
+          conversationId: conversation.id,
+          clinicId: conversation.clinic_id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
     // ── Idempotent appointment-request creation ─────────────────
     if (
       canCreateAppointmentRequests &&
-      shouldCreateAppointmentRequest({ state: automationState, transcriptLines })
+      shouldCreateAppointmentRequest({ state: automationState, messages: automationMessages })
     ) {
       const automationKey = `${conversation.id}:appointment:v1`
 
@@ -675,6 +734,7 @@ export async function POST(request: NextRequest) {
     await adminClient
       .from('conversations')
       .update({
+        ...(shouldCreateHumanHandoff ? { status: 'pending' } : {}),
         message_count: messageCount ?? 0,
         last_message: finalResponse.slice(0, 200),
         last_message_at: new Date().toISOString(),
@@ -801,6 +861,24 @@ export async function POST(request: NextRequest) {
     if (isPublicPath && clinicSlug) {
       const requestOrigin = request.headers.get('origin')?.trim() || ''
       responseBody.refreshedWidgetAccessToken = mintWidgetAccessToken(clinicSlug, requestOrigin)
+    }
+
+    if (humanHandoffRequest?.shouldDeliver) {
+      after(() =>
+        deliverHumanHandoffRequest(adminClient, {
+          requestId: humanHandoffRequest.handoff.id,
+          clinicName,
+          clinicSlug: clinicSlugForMail,
+          dashboardUrl,
+        }).catch((backgroundError) => {
+          console.error('[chat:POST] Failed to deliver queued human handoff request after response', {
+            conversationId: conversation.id,
+            clinicId: conversation.clinic_id,
+            requestId: humanHandoffRequest.handoff.id,
+            error: backgroundError instanceof Error ? backgroundError.message : String(backgroundError),
+          })
+        }),
+      )
     }
 
     const response = NextResponse.json(responseBody)

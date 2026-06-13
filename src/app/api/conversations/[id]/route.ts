@@ -52,6 +52,23 @@ export async function GET(
       .select('event_type')
       .eq('conversation_id', id)
 
+    const { data: humanHandoff, error: humanHandoffError } = await adminClient
+      .from('human_handoff_requests')
+      .select(
+        'id,status,provider_message_id,attempt_count,last_error,sent_at,provider_accepted_at,provider_delivered_at,provider_last_event,trigger_source,updated_at',
+      )
+      .eq('conversation_id', id)
+      .maybeSingle()
+
+    if (humanHandoffError) {
+      console.error('[conversations:GET] Failed to fetch human handoff details', {
+        conversationId: id,
+        clinicId: current.clinic.id,
+        error: humanHandoffError.message,
+      })
+      throw humanHandoffError
+    }
+
     const counts = (events ?? []).reduce(
       (acc: { whatsapp: number; location: number; directions: number; call: number }, event: { event_type: string }) => {
         if (event.event_type === 'whatsapp_click') acc.whatsapp += 1
@@ -77,6 +94,15 @@ export async function GET(
       needsImprovement: conversation.needs_improvement,
       leadCaptured: conversation.lead_captured,
       appointmentRequested: conversation.appointment_requested,
+      humanHandoffStatus: humanHandoff?.status ?? null,
+      humanHandoffTriggerSource: humanHandoff?.trigger_source ?? null,
+      humanHandoffProviderMessageId: humanHandoff?.provider_message_id ?? null,
+      humanHandoffAttemptCount: humanHandoff?.attempt_count ?? 0,
+      humanHandoffLastError: humanHandoff?.last_error ?? null,
+      humanHandoffAcceptedAt: humanHandoff?.provider_accepted_at ?? humanHandoff?.sent_at ?? null,
+      humanHandoffDeliveredAt: humanHandoff?.provider_delivered_at ?? null,
+      humanHandoffProviderEvent: humanHandoff?.provider_last_event ?? null,
+      humanHandoffSentAt: humanHandoff?.provider_delivered_at ?? humanHandoff?.provider_accepted_at ?? humanHandoff?.sent_at ?? null,
       whatsappClicks: counts.whatsapp,
       locationClicks: counts.location,
       directionsClicks: counts.directions,

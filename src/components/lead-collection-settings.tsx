@@ -16,6 +16,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { useRefetchOnFocus } from '@/hooks/use-refetch-on-focus'
+import { parseEmailList } from '@/lib/email-list'
 import { Settings, Mail, Trash2, Bell, ListChecks } from 'lucide-react'
 import {
   LEAD_REQUIRED_FIELD_PRESETS,
@@ -29,13 +30,6 @@ const defaultSettings: Record<string, string> = {
   notifications_enabled: 'true',
   notification_emails: '',
   required_fields: serializeLeadRequiredFields(['name', 'email', 'phone']),
-}
-
-function parseEmails(emailsStr: string): string[] {
-  return emailsStr
-    .split(',')
-    .map((e) => e.trim())
-    .filter((e) => e.length > 0)
 }
 
 function getPresetLabel(fields: LeadGateField[]) {
@@ -154,7 +148,7 @@ export default function LeadCollectionSettings() {
       toast.error('Please enter a valid email address')
       return
     }
-    const current = parseEmails(settingsRef.current.notification_emails)
+    const current = parseEmailList(settingsRef.current.notification_emails)
     if (current.includes(email)) {
       toast.error('Email already added')
       return
@@ -171,7 +165,7 @@ export default function LeadCollectionSettings() {
 
   const removeNotificationEmail = useCallback(
     (email: string) => {
-      const current = parseEmails(settingsRef.current.notification_emails)
+      const current = parseEmailList(settingsRef.current.notification_emails)
       const updated = {
         ...settingsRef.current,
         notification_emails: current.filter((e) => e !== email).join(', '),
@@ -200,7 +194,7 @@ export default function LeadCollectionSettings() {
     )
   }
 
-  const emails = parseEmails(settings.notification_emails)
+  const emails = parseEmailList(settings.notification_emails)
   const selectedPresetValue = getSelectedPresetValue(settings)
 
   return (
@@ -317,7 +311,7 @@ export default function LeadCollectionSettings() {
           </div>
           <div>
             <h3 className="text-sm font-semibold">Lead Capture Email Notifications</h3>
-            <p className="text-xs text-muted-foreground">Configure who gets notified when new leads are captured</p>
+            <p className="text-xs text-muted-foreground">Configure who gets notified when new leads or human handoffs are captured</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Label htmlFor="enable-notifications" className="text-xs font-medium">
@@ -332,7 +326,7 @@ export default function LeadCollectionSettings() {
         </div>
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground mb-3">
-            Send email notifications when new leads are captured
+            Send email notifications when new leads are captured and when human handoff requests are created
           </p>
         </div>
         {settings.notifications_enabled === 'true' && (
@@ -380,7 +374,7 @@ export default function LeadCollectionSettings() {
             </Table>
             <div className="px-4 py-3 border-t">
               <p className="text-xs text-muted-foreground mb-2">
-                List of email addresses to notify when new leads are captured. If no emails are provided, notifications will be sent to default recipients.
+                List of email addresses to notify when new leads are captured or the chatbot escalates to a human.
               </p>
               <div className="flex gap-2">
                 <Input

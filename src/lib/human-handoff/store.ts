@@ -1,0 +1,35 @@
+export const HANDOFF_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'conversation_id',
+  'lead_id',
+  'trigger_source',
+  'status',
+  'recipient_emails',
+  'visitor_name',
+  'visitor_email',
+  'visitor_phone',
+  'source_page',
+  'latest_user_message',
+  'assistant_message',
+  'summary',
+  'provider',
+  'provider_message_id',
+  'attempt_count',
+  'last_attempt_at',
+  'available_at',
+  'locked_at',
+  'locked_by',
+  'sent_at',
+  'provider_accepted_at',
+  'provider_delivered_at',
+  'provider_last_event',
+  'provider_last_event_at',
+  'last_error',
+  'created_at',
+  'updated_at',
+].join(',')
+
+export function getHumanHandoffRunnerName(runner: string | undefined) {
+  return typeof runner === 'string' && runner.trim() ? runner.trim() : 'internal-route'
+}

@@ -20,6 +20,11 @@ export type ConversationAutomationState = {
   }
 }
 
+export type AutomationTranscriptMessage = {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
 const ISO_DATE_RE = /\b\d{4}-\d{2}-\d{2}\b/
 const TIME_RE = /\b(?:[01]?\d|2[0-3]):[0-5]\d\b|\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s?(?:am|pm)\b/i
@@ -64,8 +69,15 @@ export function normalizeAutomationState(input: unknown): ConversationAutomation
   }
 }
 
-export function extractAutomationFields(lines: string[]): ConversationAutomationState['fields'] {
-  const text = lines.join('\n')
+function getUserTranscriptMessages(messages: AutomationTranscriptMessage[]) {
+  return messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.content.trim())
+    .filter((content) => content.length > 0)
+}
+
+export function extractAutomationFields(messages: AutomationTranscriptMessage[]): ConversationAutomationState['fields'] {
+  const text = getUserTranscriptMessages(messages).join('\n')
   const email = text.match(EMAIL_RE)?.[0]
   const rawPhone = text.match(PHONE_RE)?.[0]
   const parsedPhone = rawPhone ? parsePhoneNumberFromString(rawPhone, 'US') : null
@@ -100,11 +112,17 @@ export function detectHumanHelpIntent(message: string) {
   return /(appointment|book|schedule|call me|contact me|quote|price|pricing|consultation)/i.test(message)
 }
 
+export function detectHumanHandoffIntent(message: string) {
+  return /\b(human|agent|person|representative|staff|live chat|live person|real person|talk to (?:a|someone|human)|speak to (?:a|someone|human)|call me|contact me)\b/i.test(
+    message,
+  )
+}
+
 export function shouldCreateAppointmentRequest(input: {
   state: ConversationAutomationState
-  transcriptLines: string[]
+  messages: AutomationTranscriptMessage[]
 }) {
-  const hasBookingIntent = input.transcriptLines.some((line) => detectHumanHelpIntent(line))
+  const hasBookingIntent = getUserTranscriptMessages(input.messages).some((message) => detectHumanHelpIntent(message))
 
   return Boolean(
     hasBookingIntent &&

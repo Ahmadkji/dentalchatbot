@@ -8,6 +8,7 @@ import {
   mapLeadSettings,
   normalizeLeadSettingsInput,
 } from '@/lib/clinics/settings'
+import { getHumanHandoffRecipientConfiguration } from '@/lib/human-handoff/config'
 
 export async function GET() {
   const { user, supabase, error: authError } = await requireAuth()
@@ -70,6 +71,29 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    const currentSettings = await listClinicSettings(supabase, clinicId)
+    const effectiveSettings = currentSettings.map((row) =>
+      row.key in normalized
+        ? { key: row.key, value: String(normalized[row.key as keyof typeof normalized] ?? row.value) }
+        : { key: row.key, value: row.value },
+    )
+    const chatMode = effectiveSettings.find((row) => String(row.key) === 'chat_mode')?.value ?? 'ai'
+
+    if (chatMode === 'human') {
+      const recipientConfiguration = getHumanHandoffRecipientConfiguration(effectiveSettings)
+      if (!recipientConfiguration.ready) {
+        console.warn('[lead-settings:PUT] Rejected lead settings change because human mode would lose recipients', {
+          userId: user.id,
+          clinicId,
+          reason: recipientConfiguration.reason,
+        })
+        return NextResponse.json(
+          { error: recipientConfiguration.message || 'Human handoff requires notification recipients.' },
+          { status: 400 },
+        )
+      }
+    }
+
     // Batch upsert all settings in a single DB call instead of N individual writes.
     // This reduces the number of Supabase round-trips from (N writes + 1 read)
     // to (1 write + 1 read), cutting latency significantly when multiple settings change.
@@ -102,7 +126,7 @@ export async function PUT(request: NextRequest) {
     const refreshed = await listClinicSettings(supabase, clinicId)
     return NextResponse.json({ success: true, settings: mapLeadSettings(refreshed) })
   } catch (error) {
-    console.error('[lead-settings:PATCH] Failed to update lead settings', {
+    console.error('[lead-settings:PUT] Failed to update lead settings', {
       userId: user.id,
       error: error instanceof Error ? error.message : String(error),
     })

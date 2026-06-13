@@ -30,11 +30,15 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams
 
+    const rawLimit = Math.min(Math.max(Number(searchParams.get('limit')) || 50, 1), 200)
+    const rawCursor = searchParams.get('cursor') // updated_at cursor for keyset pagination
+
     let query = supabase
       .from('conversations')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('clinic_id', current.clinic.id)
       .order('updated_at', { ascending: false })
+      .limit(rawLimit)
 
     const rawStatus = searchParams.get('status')
     if (rawStatus !== null) {
@@ -45,6 +49,10 @@ export async function GET(request: NextRequest) {
       query = query.eq('status', parsedStatus.data)
     }
 
+    if (rawCursor) {
+      query = query.lt('updated_at', rawCursor)
+    }
+
     const rawSearch = searchParams.get('search')
     if (rawSearch) {
       const safeSearch = sanitizeSearchTerm(rawSearch)
@@ -53,7 +61,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const { data: conversations, error } = await query
+    const { data: conversations, error, count } = await query
 
     if (error) throw error
 
@@ -62,12 +70,31 @@ export async function GET(request: NextRequest) {
     const convIds = (conversations ?? []).map((c: { id: string }) => c.id)
 
     let eventCountsByConversation: Record<string, { whatsapp: number; location: number; directions: number; call: number }> = {}
+    let handoffsByConversation: Record<
+      string,
+      {
+        status: string | null
+        trigger_source: string | null
+        attempt_count: number
+        last_error: string | null
+        provider_accepted_at: string | null
+        provider_delivered_at: string | null
+      }
+    > = {}
 
     if (convIds.length > 0) {
-      const { data: events } = await adminClient
-        .from('interaction_events')
-        .select('conversation_id, event_type')
-        .in('conversation_id', convIds)
+      const [{ data: events }, { data: handoffs, error: handoffError }] = await Promise.all([
+        adminClient
+          .from('interaction_events')
+          .select('conversation_id, event_type')
+          .in('conversation_id', convIds),
+        adminClient
+          .from('human_handoff_requests')
+          .select(
+            'conversation_id,status,trigger_source,attempt_count,last_error,provider_accepted_at,provider_delivered_at,sent_at',
+          )
+          .in('conversation_id', convIds),
+      ])
 
       eventCountsByConversation = (events ?? []).reduce<Record<string, { whatsapp: number; location: number; directions: number; call: number }>>((acc, event) => {
         if (!event.conversation_id) return acc
@@ -80,10 +107,47 @@ export async function GET(request: NextRequest) {
         if (event.event_type === 'call_click') acc[event.conversation_id].call += 1
         return acc
       }, {})
+
+      if (handoffError) {
+        console.error('[conversations:GET] Failed to fetch human handoff rows', {
+          userId: user.id,
+          clinicId: current.clinic.id,
+          error: handoffError.message,
+        })
+        throw handoffError
+      }
+
+      handoffsByConversation = (handoffs ?? []).reduce<
+        Record<
+          string,
+          {
+            status: string | null
+            trigger_source: string | null
+            attempt_count: number
+            last_error: string | null
+            provider_accepted_at: string | null
+            provider_delivered_at: string | null
+          }
+        >
+      >((acc, handoff) => {
+        const conversationId = handoff.conversation_id as string | null
+        if (!conversationId) return acc
+        acc[conversationId] = {
+          status: (handoff.status as string | null) ?? null,
+          trigger_source: (handoff.trigger_source as string | null) ?? null,
+          attempt_count: Number(handoff.attempt_count ?? 0),
+          last_error: (handoff.last_error as string | null) ?? null,
+          provider_accepted_at:
+            (handoff.provider_accepted_at as string | null) ?? (handoff.sent_at as string | null) ?? null,
+          provider_delivered_at: (handoff.provider_delivered_at as string | null) ?? null,
+        }
+        return acc
+      }, {})
     }
 
     const flattened = (conversations ?? []).map((conv: Record<string, unknown>) => {
       const counts = eventCountsByConversation[conv.id as string] || { whatsapp: 0, location: 0, directions: 0, call: 0 }
+      const handoff = handoffsByConversation[conv.id as string]
       return {
         id: conv.id,
         patientId: null,
@@ -98,6 +162,12 @@ export async function GET(request: NextRequest) {
         needsImprovement: conv.needs_improvement,
         leadCaptured: conv.lead_captured,
         appointmentRequested: conv.appointment_requested,
+        humanHandoffStatus: handoff?.status ?? null,
+        humanHandoffTriggerSource: handoff?.trigger_source ?? null,
+        humanHandoffAttemptCount: handoff?.attempt_count ?? 0,
+        humanHandoffLastError: handoff?.last_error ?? null,
+        humanHandoffAcceptedAt: handoff?.provider_accepted_at ?? null,
+        humanHandoffDeliveredAt: handoff?.provider_delivered_at ?? null,
         whatsappClicks: counts.whatsapp,
         locationClicks: counts.location,
         directionsClicks: counts.directions,
@@ -107,7 +177,7 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    return NextResponse.json(flattened)
+    return NextResponse.json({ conversations: flattened, totalCount: count ?? flattened.length })
   } catch (error) {
     console.error('[conversations:GET] Failed to fetch conversations', {
       userId: user.id,
